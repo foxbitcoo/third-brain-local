@@ -23,17 +23,26 @@
 
 ```bash
 npm install
-npm run setup
-```
-
-编辑新生成的 `.env.local`，填写你自己的值。然后：
-
-```bash
-npm run preflight
 npm start
 ```
 
-打开 `http://127.0.0.1:4310`，按页面顺序：
+首次启动会在终端显示本地地址。用浏览器打开 `http://127.0.0.1:4310` 后进入设置导览；页面会逐步告诉你：
+
+1. 去哪里创建 WPS 企业自建应用并取得 App ID / App Key；
+2. 需要申请哪两项 WPS 权限；
+3. 在哪里填写本地 OAuth 回调地址；
+4. 去哪里创建自己的 DeepSeek API Key；
+5. 哪些值只保存在当前电脑，不能发给别人。
+
+按导览保存后，停止并重新运行：
+
+```bash
+npm start
+```
+
+也可以继续使用 `npm run setup` 手动创建 `.env.local`，再运行 `npm run preflight` 检查。
+
+打开 `http://127.0.0.1:4310`，完成配置后按页面顺序：
 
 1. 授权当前 WPS 账号；
 2. 读取会话清单；

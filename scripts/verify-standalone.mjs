@@ -45,6 +45,30 @@ try {
   if (!preflight.stdout.includes("WPS 应用配置：待配置") || !preflight.stdout.includes("大模型配置：待配置")) {
     throw new Error("clean preflight did not report both external configurations as missing");
   }
+  const { createLocalSetupServer } = await import(path.join(target, "src", "setup-server.mjs"));
+  const setupServer = createLocalSetupServer({
+    setupFile: path.join(target, "public", "setup.html"),
+    envFile: path.join(target, ".env.local"),
+    port: 4310,
+  });
+  await new Promise((resolve) => setupServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const setupUrl = `http://127.0.0.1:${setupServer.address().port}`;
+    const [setupResponse, setupStatusResponse] = await Promise.all([
+      fetch(setupUrl),
+      fetch(`${setupUrl}/api/setup/status`),
+    ]);
+    const setupPage = await setupResponse.text();
+    const setupStatus = await setupStatusResponse.json();
+    if (!setupResponse.ok
+      || !setupPage.includes("先准备三样东西")
+      || setupStatus.configurationReady !== false
+      || setupStatus.requiredFields.length !== 3) {
+      throw new Error("first-run setup guide readback failed");
+    }
+  } finally {
+    await new Promise((resolve) => setupServer.close(resolve));
+  }
   const { createDemoServer } = await import(path.join(target, "scripts", "serve-demo.mjs"));
   const { server, url } = await createDemoServer({ root: path.join(target, "demo"), port: 0 });
   try {
@@ -79,7 +103,7 @@ try {
   } finally {
     await new Promise((resolve) => localServer.close(resolve));
   }
-  process.stdout.write("独立运行验证通过：无私人环境时，安装、测试、检查、预检和静态 Demo 均按公开契约工作；真实 WPS 与模型调用保持 NOT_RUN。\n");
+  process.stdout.write("独立运行验证通过：无私人环境时，安装、首次设置导览、测试、检查、预检和静态 Demo 均按公开契约工作；真实 WPS 与模型调用保持 NOT_RUN。\n");
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
 }

@@ -15,6 +15,7 @@ import { isPublicCopyEntry } from "../scripts/standalone-policy.mjs";
 import { createLocalConfig } from "../src/config.mjs";
 import { createEncryptedLocalStore } from "../src/encrypted-store.mjs";
 import { createLocalHttpServer } from "../src/http-server.mjs";
+import { createLocalSetupServer } from "../src/setup-server.mjs";
 import {
   buildWpsAuthorizationUrl,
   exchangeWpsAuthorizationCode,
@@ -78,6 +79,62 @@ test("安装预检明确拒绝把浏览器 WPS_SID 当作认证方式", () => {
   assert.equal(assessment.ready, false);
   assert.equal(assessment.blockers.some((item) => item.code === "unsupported_wps_sid"), true);
   assert.doesNotMatch(formatInstallReport(assessment), /browser-session-value/);
+});
+
+test("首次启动先展示可执行设置导览，并将安装者自己的凭证安全写入本地配置", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-setup-"));
+  const envFile = path.join(root, ".env.local");
+  const setupFile = path.resolve(import.meta.dirname, "..", "public", "setup.html");
+  const server = createLocalSetupServer({ setupFile, envFile, port: 4310 });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const installerSecret = "installer-owned-app-key";
+  const modelSecret = "installer-owned-deepseek-key";
+
+  try {
+    const page = await (await fetch(origin)).text();
+    assert.match(page, /先准备三样东西/);
+    assert.match(page, /WPS 企业自建应用/);
+    assert.match(page, /DeepSeek API Key/);
+    assert.match(page, /open\.wps\.cn/);
+    assert.match(page, /platform\.deepseek\.com\/api_keys/);
+
+    const initial = await (await fetch(`${origin}/api/setup/status`)).json();
+    assert.equal(initial.configurationReady, false);
+    assert.deepEqual(initial.requiredFields, ["WPS_APP_ID", "WPS_APP_KEY", "DEEPSEEK_API_KEY"]);
+
+    const hostile = await fetch(`${origin}/api/setup/save`, {
+      method: "POST",
+      headers: { origin: "https://hostile.example.invalid", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(hostile.status, 400);
+
+    const saved = await fetch(`${origin}/api/setup/save`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({
+        wpsAppId: "installer-owned-app-id",
+        wpsAppKey: installerSecret,
+        deepseekApiKey: modelSecret,
+      }),
+    });
+    const savedPayload = await saved.json();
+    assert.equal(saved.status, 200);
+    assert.deepEqual(savedPayload, { saved: true, configurationReady: true, restartRequired: true });
+    assert.doesNotMatch(JSON.stringify(savedPayload), new RegExp(`${installerSecret}|${modelSecret}`));
+
+    const persisted = await readFile(envFile, "utf8");
+    const appIdKey = ["WPS", "APP", "ID"].join("_");
+    const appKeyKey = ["WPS", "APP", "KEY"].join("_");
+    const modelKey = ["DEEPSEEK", "API", "KEY"].join("_");
+    assert.match(persisted, new RegExp(`${appIdKey}=installer-owned-app-id`));
+    assert.match(persisted, new RegExp(`${appKeyKey}=${installerSecret}`));
+    assert.match(persisted, new RegExp(`${modelKey}=${modelSecret}`));
+    assert.equal((await stat(envFile)).mode & 0o777, 0o600);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("发布检查拒绝凭证、私人绝对路径、私有云文档链接和数据文件", async () => {
