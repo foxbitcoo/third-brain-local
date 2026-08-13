@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="第三大脑公开产品与安装流程预览">
+  <title>第三大脑 · 公开预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #16211d;
+      --muted: #68756f;
+      --paper: #f6f3ea;
+      --panel: #fffdf8;
+      --line: #cfd7d1;
+      --green: #143f35;
+      --mint: #d9eee4;
+      --blue: #2256c7;
+      --amber: #f1b82d;
+      --shadow: 0 24px 70px rgba(18, 47, 39, .12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 86% 8%, rgba(241, 184, 45, .22), transparent 24rem),
+        linear-gradient(135deg, #edf5ef 0%, var(--paper) 48%, #eef1f8 100%);
+      font-family: "PingFang SC", "Hiragino Sans GB", sans-serif;
+    }
+    button { font: inherit; }
+    .shell { min-height: 100vh; padding: 22px; }
+    .frame {
+      max-width: 1440px;
+      min-height: calc(100vh - 44px);
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid rgba(20, 63, 53, .18);
+      border-radius: 30px;
+      background: rgba(255, 253, 248, .88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 22px 28px;
+      border-bottom: 1px solid var(--line);
+      background: var(--green);
+      color: #fff;
+    }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 13px;
+      color: var(--green);
+      background: var(--amber);
+      font-family: "Songti SC", serif;
+      font-size: 20px;
+      font-weight: 800;
+    }
+    .brand strong { display: block; font-family: "Songti SC", serif; font-size: 21px; letter-spacing: .04em; }
+    .brand span { display: block; margin-top: 3px; color: rgba(255,255,255,.68); font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
+    .preview-badge { padding: 8px 12px; border: 1px solid rgba(255,255,255,.25); border-radius: 999px; color: #dcece5; font-size: 12px; }
+    .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+    nav { padding: 24px 16px; border-right: 1px solid var(--line); background: rgba(232, 239, 233, .72); }
+    nav p { margin: 0 12px 14px; color: var(--muted); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+    .nav-button {
+      width: 100%;
+      margin: 3px 0;
+      padding: 13px 14px;
+      border: 0;
+      border-radius: 12px;
+      color: #45514c;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      transition: transform .2s ease, background .2s ease, color .2s ease;
+    }
+    .nav-button:hover { transform: translateX(3px); }
+    .nav-button[aria-selected="true"] { color: #fff; background: var(--green); }
+    main { min-width: 0; padding: 34px clamp(22px, 5vw, 70px) 58px; }
+    .view[hidden] { display: none; }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    h1, h2, h3 { font-family: "Songti SC", "STSong", serif; }
+    h1 { max-width: 850px; margin: 12px 0 14px; font-size: clamp(38px, 5vw, 74px); line-height: 1.02; letter-spacing: -.04em; }
+    .lede { max-width: 760px; color: var(--muted); font-size: 17px; line-height: 1.75; }
+    .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 30px; }
+    .status-card, .card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+    }
+    .status-card { padding: 18px; }
+    .status-card b { display: block; margin-bottom: 7px; font-size: 15px; }
+    .status-card span { color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .status-card.ready { background: var(--mint); border-color: #a8cdbb; }
+    .status-card.pending { background: #fff7db; border-color: #ead18b; }
+    .section-title { margin: 38px 0 14px; font-size: 26px; }
+    .steps { display: grid; gap: 12px; counter-reset: install; }
+    .step {
+      counter-increment: install;
+      display: grid;
+      grid-template-columns: 48px 1fr auto;
+      align-items: center;
+      gap: 16px;
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: #fff;
+    }
+    .step::before {
+      content: "0" counter(install);
+      color: var(--blue);
+      font-family: "Songti SC", serif;
+      font-weight: 800;
+    }
+    .step b { display: block; margin-bottom: 4px; }
+    .step small { color: var(--muted); }
+    .pill { padding: 6px 9px; border-radius: 999px; color: #6f5b19; background: #f8e8ae; font-size: 11px; white-space: nowrap; }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 28px; }
+    .flow .card { position: relative; min-height: 170px; padding: 20px; }
+    .flow .card:not(:last-child)::after { content: "→"; position: absolute; right: -18px; top: 70px; z-index: 2; color: var(--blue); font-size: 22px; }
+    .number { color: var(--blue); font-family: "Songti SC", serif; font-size: 34px; font-weight: 800; }
+    .flow h3 { margin: 18px 0 8px; font-size: 19px; }
+    .flow p, .audit-card p { color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .audit { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 14px; margin-top: 28px; }
+    .audit-card { min-height: 360px; padding: 22px; border: 1px solid var(--line); border-radius: 22px; background: #fff; }
+    .audit-card h3 { margin: 10px 0 8px; font-size: 22px; }
+    .placeholder { height: 12px; margin: 14px 0; border-radius: 8px; background: #e8ece9; }
+    .placeholder.short { width: 58%; }
+    .event { margin-top: 18px; padding: 15px; border-left: 3px solid var(--amber); border-radius: 0 12px 12px 0; background: #faf8f1; }
+    .boundary { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 28px; }
+    .boundary .card { padding: 24px; }
+    .boundary ul { padding-left: 20px; color: var(--muted); line-height: 1.8; }
+    .boundary .private { border-top: 5px solid #9a4b42; }
+    .boundary .public { border-top: 5px solid var(--green); }
+    footer { padding: 18px 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    @media (max-width: 900px) {
+      .shell { padding: 0; }
+      .frame { min-height: 100vh; border: 0; border-radius: 0; }
+      .layout { grid-template-columns: 1fr; }
+      nav { display: flex; gap: 5px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      nav p { display: none; }
+      .nav-button { min-width: max-content; width: auto; }
+      .status-grid, .flow, .audit, .boundary { grid-template-columns: 1fr; }
+      .flow .card:not(:last-child)::after { display: none; }
+      .step { grid-template-columns: 38px 1fr; }
+      .step .pill { grid-column: 2; justify-self: start; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .view:not([hidden]) { animation: arrive .35s ease both; }
+      @keyframes arrive { from { opacity: 0; transform: translateY(8px); } }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="frame">
+      <header>
+        <div class="brand"><div class="mark">三</div><div><strong>第三大脑</strong><span>Public Preview</span></div></div>
+        <div class="preview-badge">文档与静态交互预览 · 不连接真实数据</div>
+      </header>
+      <div class="layout">
+        <nav aria-label="预览模块">
+          <p>Preview modules</p>
+          <button class="nav-button" aria-selected="true" data-view="setup">安装状态</button>
+          <button class="nav-button" aria-selected="false" data-view="discovery">信号发现</button>
+          <button class="nav-button" aria-selected="false" data-view="audit">记忆审计</button>
+          <button class="nav-button" aria-selected="false" data-view="boundary">产品边界</button>
+        </nav>
+        <main>
+          <section class="view" id="setup">
+            <div class="eyebrow">Setup first</div>
+            <h1>先建立自己的连接，再开始形成记忆。</h1>
+            <p class="lede">公开版本不会复用维护者的 WPS、飞书或模型环境。安装者需要创建自己的企业应用、完成权限审批与 OAuth，并配置自己的大模型服务。</p>
+            <div class="status-grid">
+              <div class="status-card ready"><b>公开预览</b><span>无需密钥即可运行，只展示产品结构。</span></div>
+              <div class="status-card pending"><b>WPS 连接</b><span>需要安装者自己的 App ID、App Key、权限与 OAuth。</span></div>
+              <div class="status-card pending"><b>模型服务</b><span>需要安装者自己的 API 地址、模型和 API Key。</span></div>
+            </div>
+            <h2 class="section-title">安装后的五个确认</h2>
+            <div class="steps">
+              <div class="step"><div><b>创建企业自建应用</b><small>每个企业使用自己的 WPS 应用。</small></div><span class="pill">用户配置</span></div>
+              <div class="step"><div><b>申请并发布权限</b><small>区分用户授权、应用授权与 delegated MCP。</small></div><span class="pill">管理员审批</span></div>
+              <div class="step"><div><b>完成用户 OAuth</b><small>新增权限发布后，用户需要重新授权。</small></div><span class="pill">用户操作</span></div>
+              <div class="step"><div><b>选择大模型服务</b><small>填写自己的兼容 API 地址、模型和 Key。</small></div><span class="pill">用户配置</span></div>
+              <div class="step"><div><b>运行本地预检</b><small>不显示密钥，只报告缺项和下一步。</small></div><span class="pill">npm run preflight</span></div>
+            </div>
+          </section>
+          <section class="view" id="discovery" hidden>
+            <div class="eyebrow">Source discovery</div>
+            <h1>用少量种子，让来源在用户裁决下逐步生长。</h1>
+            <p class="lede">系统先提出候选，不把活跃、提及或相似内容直接当作重要事实；用户以确认、排除和暂停控制监控范围。</p>
+            <div class="flow">
+              <div class="card"><div class="number">01</div><h3>种子来源</h3><p>由用户确认的少量来源与关系线索。</p></div>
+              <div class="card"><div class="number">02</div><h3>候选发现</h3><p>基于行为、对象与跨来源证据提出候选。</p></div>
+              <div class="card"><div class="number">03</div><h3>用户裁决</h3><p>确认、排除当前冷启动、暂停或恢复。</p></div>
+              <div class="card"><div class="number">04</div><h3>持续监控</h3><p>只在已确认边界内增量读取与复核。</p></div>
+            </div>
+          </section>
+          <section class="view" id="audit" hidden>
+            <div class="eyebrow">L0 · L1 · L2</div>
+            <h1>每条状态都能回到事件，每个事件都能回到依据。</h1>
+            <p class="lede">这里只演示层级与交互位置，不包含人物、项目、群聊、消息或可下载样本。</p>
+            <div class="audit">
+              <div class="audit-card"><div class="eyebrow">L0 当前状态</div><h3>工作主线 01</h3><p>面向用户的当前状态摘要。</p><div class="placeholder"></div><div class="placeholder short"></div></div>
+              <div class="audit-card"><div class="eyebrow">L1 工作事件</div><h3>事件时间线</h3><div class="event"><b>事件 01</b><p>状态变化的业务化表达。</p></div><div class="event"><b>事件 02</b><p>等待用户确认的候选变化。</p></div></div>
+              <div class="audit-card"><div class="eyebrow">L2 最小依据</div><h3>来源定位</h3><p>只展示支撑判断所需的最小依据，并继承原始可见范围。</p><div class="placeholder"></div><div class="placeholder"></div><div class="placeholder short"></div></div>
+            </div>
+          </section>
+          <section class="view" id="boundary" hidden>
+            <div class="eyebrow">Release contract</div>
+            <h1>私人真相与公开产品说明，只能单向、经审核地连接。</h1>
+            <div class="boundary">
+              <article class="card private"><h2>私人环境</h2><ul><li>真实 WPS 租户与 OAuth</li><li>人员、消息、来源和裁决</li><li>私有飞书知识库</li><li>模型与服务凭证</li></ul></article>
+              <article class="card public"><h2>公开环境</h2><ul><li>自洽 Markdown 文档</li><li>空白配置模板与预检</li><li>无业务叙事的静态 Demo</li><li>通用泄漏与完整性检查</li></ul></article>
+            </div>
+          </section>
+        </main>
+      </div>
+      <footer>当前候选不包含真实采集、模型处理、机器人后端或生产部署。未验证能力不会写成已完成。</footer>
+    </section>
+  </div>
+  <script>
+    const buttons = [...document.querySelectorAll("[data-view]")];
+    const views = [...document.querySelectorAll(".view")];
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        for (const candidate of buttons) candidate.setAttribute("aria-selected", String(candidate === button));
+        for (const view of views) view.hidden = view.id !== button.dataset.view;
+        document.getElementById(button.dataset.view).querySelector(".eyebrow")?.scrollIntoView({ block: "nearest" });
+      });
+    }
+  </script>
+</body>
+</html>

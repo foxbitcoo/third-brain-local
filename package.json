@@ -1,0 +1,23 @@
+{
+  "name": "third-brain-local",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "postinstall": "node scripts/preflight.mjs --informational",
+    "setup": "node scripts/setup-local.mjs",
+    "start": "node scripts/start-local.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check-release.mjs",
+    "check:git": "node scripts/check-public-git.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "demo": "node scripts/serve-demo.mjs",
+    "verify": "node scripts/verify-standalone.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}
