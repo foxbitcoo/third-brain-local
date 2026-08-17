@@ -4,9 +4,22 @@ import { randomUUID } from "node:crypto";
 
 import { createLocalConfig } from "./config.mjs";
 
-const REQUIRED_FIELDS = Object.freeze(["WPS_APP_ID", "WPS_APP_KEY", "DEEPSEEK_API_KEY"]);
-const INPUT_KEYS = Object.freeze(["deepseekApiKey", "wpsAppId", "wpsAppKey"]);
-const SAFE_INSTALL_VALUE = /^[A-Za-z0-9._-]{3,512}$/u;
+const REQUIRED_FIELDS = Object.freeze([
+  "WPS_APP_ID",
+  "WPS_APP_KEY",
+  "LLM_PROVIDER",
+  "LLM_BASE_URL",
+  "LLM_MODEL",
+  "LLM_API_KEY",
+]);
+const INPUT_KEYS = Object.freeze([
+  "llmApiKey",
+  "llmBaseUrl",
+  "llmModel",
+  "llmProvider",
+  "wpsAppId",
+  "wpsAppKey",
+]);
 
 function json(response, status, value) {
   response.writeHead(status, {
@@ -44,7 +57,10 @@ async function readJsonBody(request) {
   if (!value || Object.getPrototypeOf(value) !== Object.prototype) throw new Error("设置格式无效");
   if (Object.keys(value).sort().join("|") !== [...INPUT_KEYS].sort().join("|")) throw new Error("设置字段不完整或包含额外字段");
   for (const key of INPUT_KEYS) {
-    if (typeof value[key] !== "string" || !SAFE_INSTALL_VALUE.test(value[key].trim())) throw new Error("设置值格式无效");
+    if (typeof value[key] !== "string"
+      || value[key].trim().length < 2
+      || value[key].trim().length > 1024
+      || /[\u0000-\u001f\u007f]/u.test(value[key])) throw new Error("设置值格式无效");
   }
   return Object.fromEntries(INPUT_KEYS.map((key) => [key, value[key].trim()]));
 }
@@ -54,15 +70,17 @@ function environmentFromInput(input, port) {
     WPS_APP_ID: input.wpsAppId,
     WPS_APP_KEY: input.wpsAppKey,
     WPS_REDIRECT_URI: `http://127.0.0.1:${port}/oauth/wps/callback`,
-    WPS_SCOPES: "kso.user_base.read delegated:kso.mcp_message.readwrite",
-    DEEPSEEK_API_KEY: input.deepseekApiKey,
-    DEEPSEEK_MODEL: "deepseek-v4-pro",
+    WPS_SCOPES: "kso.user_base.read kso.mcp_message.readwrite",
+    LLM_PROVIDER: input.llmProvider,
+    LLM_BASE_URL: input.llmBaseUrl,
+    LLM_MODEL: input.llmModel,
+    LLM_API_KEY: input.llmApiKey,
     LOCAL_PORT: String(port),
   };
 }
 
 function serializeEnvironment(environment) {
-  const orderedKeys = ["WPS_APP_ID", "WPS_APP_KEY", "WPS_REDIRECT_URI", "WPS_SCOPES", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", "LOCAL_PORT"];
+  const orderedKeys = ["WPS_APP_ID", "WPS_APP_KEY", "WPS_REDIRECT_URI", "WPS_SCOPES", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LOCAL_PORT"];
   return ["# 由第三大脑本地设置导览生成。不要提交、截图或发送此文件。", ...orderedKeys.map((key) => `${key}=${environment[key]}`), ""].join("\n");
 }
 
@@ -84,7 +102,7 @@ export function createLocalSetupServer({ setupFile, envFile, port = 4310 }) {
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; form-action 'self' https://open.wps.cn https://platform.deepseek.com",
+          "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; form-action 'self' https://open.wps.cn",
           "x-frame-options": "DENY",
         });
         response.end(html);

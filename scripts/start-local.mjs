@@ -2,7 +2,7 @@
 import path from "node:path";
 
 import { createLocalConfig } from "../src/config.mjs";
-import { createDeepSeekAnalyzer } from "../src/deepseek.mjs";
+import { createOpenAiCompatibleAnalyzer } from "../src/openai-compatible.mjs";
 import { createEncryptedLocalStore } from "../src/encrypted-store.mjs";
 import { readEnvFile } from "../src/env-file.mjs";
 import { createLocalHttpServer } from "../src/http-server.mjs";
@@ -24,12 +24,12 @@ if (!config.ready) {
   const runtime = createLocalTrialRuntime({
     config,
     store,
-    inference: createDeepSeekAnalyzer(config.model),
+    inference: createOpenAiCompatibleAnalyzer(config.model),
   });
   server = createLocalHttpServer({ runtime, indexFile: new URL("../public/index.html", import.meta.url) });
 }
 server.listen(listenPort, config.host, () => {
   process.stdout.write(`第三大脑本地试用已启动：http://${config.host}:${listenPort}\n`);
-  if (!config.ready) process.stdout.write(`首次设置尚未完成：请在浏览器打开 http://${config.host}:${listenPort}，按导览准备并保存自己的 WPS 与 DeepSeek 配置。\n`);
-  else process.stdout.write("数据只保存在当前电脑；只有点击“分析”后，所选消息才会发送到安装者配置的 DeepSeek API。\n");
+  if (!config.ready) process.stdout.write(`首次设置尚未完成：请在浏览器打开 http://${config.host}:${listenPort}，按导览准备并保存自己的 WPS 与模型配置。\n`);
+  else process.stdout.write(`数据只保存在当前电脑；只有点击“分析”后，所选消息才会发送到安装者配置的 ${config.model.provider} API。\n`);
 });

@@ -7,16 +7,16 @@
     → WPS 用户消息 MCP（只读）
     → 当前电脑的加密文件
     → 用户显式点击分析
-      → 安装者自己的 DeepSeek V4 Pro API
+      → 安装者自己配置的 OpenAI-compatible 模型 API
 ```
 
 ## 数据边界
 
 - 服务只监听 `127.0.0.1`，不提供公网入口；
-- App Key 与 DeepSeek Key 只从 `.env.local` 读取；
+- App Key 与模型 Key 只从 `.env.local` 读取；
 - OAuth Token、导入消息和分析结果只以 AES-256-GCM 密文写入 `.runtime/user-data`；
 - 聊天消息只在用户选择群聊并点击导入后读取；
-- 消息只在用户点击分析后发送给其配置的 DeepSeek 官方 API；
+- 消息只在用户点击分析后发送给其明确配置的模型 API；
 - 维护者没有远程后端，也无法读取安装者本地数据。
 
 ## 当前产品切片

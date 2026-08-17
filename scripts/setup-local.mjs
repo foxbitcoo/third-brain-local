@@ -9,7 +9,7 @@ try {
   await handle.close();
   await copyFile(source, target);
   await chmod(target, 0o600);
-  process.stdout.write("已创建 .env.local（权限 600）。请填写你自己的 WPS 应用凭证和 DeepSeek API Key。\n");
+  process.stdout.write("已创建 .env.local（权限 600）。请填写你自己的 WPS 应用凭证和大模型配置。\n");
 } catch (error) {
   if (error?.code !== "EEXIST") throw error;
   await chmod(target, 0o600);
