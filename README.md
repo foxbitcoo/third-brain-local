@@ -1,6 +1,6 @@
 # 第三大脑 · 本地试用包
 
-这是一个 **Local-first Alpha**：每位安装者在自己的电脑运行服务，使用自己的 WPS 企业应用、用户 OAuth 和 DeepSeek API Key。维护者不会收到安装者的 Token、消息或分析结果。
+这是一个 **Local-first Alpha**：每位安装者在自己的电脑运行服务，使用自己的 WPS 企业应用、用户 OAuth 和自选模型 API。维护者不会收到安装者的 Token、消息或分析结果。
 
 当前版本用于尽快验证一个问题：它能不能从你亲自选择的少量 WPS 群聊里，找出值得关注的工作信号，并用可读的中文说明为什么。
 
@@ -9,7 +9,7 @@
 - 在本机完成 WPS 用户 OAuth；
 - 使用当前用户身份读取其有权访问的会话，不要求把机器人加入群聊；
 - 选择 1–10 个群聊，导入最近 1–30 天的文本消息；
-- 只有在用户显式点击“分析”后，才把所选消息发送给该用户自己的 DeepSeek V4 Pro API；
+- 只有在用户显式点击“分析”后，才把所选消息发送给该用户配置的 OpenAI-compatible 模型 API；
 - 将 WPS Token、消息和分析结果加密保存在当前电脑；
 - 展示业务化候选，供用户判断“重要、相关但非重点、噪声、不确定”。
 
@@ -19,7 +19,7 @@
 
 ## 五分钟开始
 
-需要：Node.js 20+、一个 WPS 企业自建应用、一个 DeepSeek API Key。
+需要：Node.js 20+、一个 WPS 企业自建应用，以及一套 OpenAI-compatible 模型 API 配置。
 
 ```bash
 npm install
@@ -31,7 +31,7 @@ npm start
 1. 去哪里创建 WPS 企业自建应用并取得 App ID / App Key；
 2. 需要申请哪两项 WPS 权限；
 3. 在哪里填写本地 OAuth 回调地址；
-4. 去哪里创建自己的 DeepSeek API Key；
+4. 如何填写模型服务商、API 地址、模型名称／Endpoint ID 和自己的 API Key；
 5. 哪些值只保存在当前电脑，不能发给别人。
 
 按导览保存后，停止并重新运行：
@@ -55,10 +55,10 @@ npm start
 在 WPS 开放平台创建企业自建应用：
 
 - 用户授权回调：`http://127.0.0.1:4310/oauth/wps/callback`
-- 用户权限：`kso.user_base.read`
-- 用户消息 MCP：`delegated:kso.mcp_message.readwrite`
+- 用户基础信息：搜索 `kso.user_base.read`，选择权限类型 `user`
+- 用户消息 MCP：搜索 `kso.mcp_message.readwrite`，选择权限类型 `user`
 
-权限必须先在开发者后台申请并随版本审批发布，然后每位安装者使用自己的账号重新 OAuth。不要复制浏览器 `WPS_SID`。
+不要在开放平台搜索框输入 `delegated:`，也不要选择同名的 `app` 权限。权限必须先在开发者后台申请并随版本审批发布，然后每位安装者使用自己的账号重新 OAuth。不要复制浏览器 `WPS_SID`。
 
 详见 [WPS 权限与授权](docs/WPS-PERMISSIONS.md)。
 
@@ -67,8 +67,8 @@ npm start
 - `.env.local`、`.runtime/`、日志和本地数据均被 Git 忽略；
 - 本地凭证、消息与分析结果使用 AES-256-GCM 加密后落盘，文件权限限制为当前用户；
 - 本地加密主要防止误上传和明文泄漏，不能抵御已经控制该电脑账户的恶意程序；
-- 点击“分析”意味着所选消息会发送至安装者配置的 DeepSeek 官方 API；不点击则不会调用模型；
-- 每人必须使用自己的 WPS OAuth 和 DeepSeek Key。严禁共用维护者或其他同事的办公凭证。
+- 点击“分析”意味着所选消息会发送至安装者配置的模型 API；不点击则不会调用模型；
+- 每人必须使用自己的 WPS OAuth 和模型 Key。严禁共用维护者或其他同事的办公凭证。
 
 详见 [隐私说明](docs/PRIVACY.md)。
 
@@ -93,6 +93,6 @@ node scripts/check-public-git.mjs --denylist /absolute/private/denylist.txt
 
 已在无私人配置的干净目录验证：安装、单元测试、发布扫描、配置预检和静态 Demo。
 
-由于发布环境没有安装者的 WPS 应用、OAuth 和 DeepSeek Key，以下必须由每位试用者首次运行时验证：WPS 权限审批、真实 OAuth、会话读取、消息分页、DeepSeek 请求与结果质量。未验证能力不会写成已完成。
+由于发布环境没有安装者的 WPS 应用、OAuth 和模型 Key，以下必须由每位试用者首次运行时验证：WPS 权限审批、真实 OAuth、会话读取、消息分页、所选模型请求与结果质量。未验证能力不会写成已完成。
 
 进一步阅读：[安装](docs/INSTALL.md) · [架构](docs/ARCHITECTURE.md) · [模型配置](docs/MODEL-CONFIG.md) · [首版限制](docs/PREVIEW-LIMITS.md)

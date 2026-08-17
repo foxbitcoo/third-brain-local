@@ -63,7 +63,7 @@ try {
     if (!setupResponse.ok
       || !setupPage.includes("先准备三样东西")
       || setupStatus.configurationReady !== false
-      || setupStatus.requiredFields.length !== 3) {
+      || setupStatus.requiredFields.length !== 6) {
       throw new Error("first-run setup guide readback failed");
     }
   } finally {

@@ -10,12 +10,12 @@
 </head>
 <body>
   <main class="shell">
-    <header><div><h1>第三大脑 · 本地试用</h1><p class="sub">先验证它能不能从你选择的 WPS 群聊里找到值得关注的工作信号。数据加密保存在当前电脑，只有你点击分析时才发送给你自己的 DeepSeek API。</p></div><span class="badge">Local-first Alpha</span></header>
+    <header><div><h1>第三大脑 · 本地试用</h1><p class="sub">先验证它能不能从你选择的 WPS 群聊里找到值得关注的工作信号。数据加密保存在当前电脑，只有你点击分析时才发送给你自己配置的模型 API。</p></div><span class="badge">Local-first Alpha</span></header>
     <div class="grid">
       <section class="card"><h2>1. 连接状态</h2><div class="status" id="status"></div><button id="authorize">授权当前 WPS 账号</button><p>每位同事使用自己的 WPS 应用、OAuth 和 API Key，不共享任何人的凭证或办公数据。</p></section>
       <section class="card"><h2>2. 选择时间</h2><p>首轮建议只选 1–3 个你最熟悉的群，先判断信息是否找对。</p><label>最近 <select id="days"><option>3</option><option selected>7</option><option>14</option><option>30</option></select> 天</label><p><button id="load">读取我的会话清单</button></p></section>
       <section class="card wide"><h2>3. 选择群聊并导入</h2><div id="chats" class="chat-list"><p>完成授权后读取会话清单。</p></div><button id="import" disabled>导入所选消息</button> <span id="importResult"></span></section>
-      <section class="card wide"><h2>4. 生成业务化候选</h2><p>系统只提出候选，不把活跃、@ 或高频自动当作重要。你需要判断“重要、相关但非重点、噪声、不确定”。</p><button id="analyze" disabled>使用我的 DeepSeek Key 分析</button><div id="analysis" class="result" hidden></div></section>
+      <section class="card wide"><h2>4. 生成业务化候选</h2><p>系统只提出候选，不把活跃、@ 或高频自动当作重要。你需要判断“重要、相关但非重点、噪声、不确定”。</p><button id="analyze" disabled>使用我的模型分析</button><div id="analysis" class="result" hidden></div></section>
     </div>
     <footer>首版只读：不会向 WPS 发送消息，不会把数据上传到维护者服务器，也不会自动扩大监控范围。</footer>
   </main>

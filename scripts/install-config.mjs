@@ -1,8 +1,13 @@
 import { validateLocalRedirect } from "../src/config.mjs";
+import {
+  normalizeWpsScopes,
+  resolveModelConfiguration,
+  validModelEndpoint,
+} from "../src/config-normalization.mjs";
 
 const REQUIRED_WPS_SCOPES = Object.freeze([
   "kso.user_base.read",
-  "delegated:kso.mcp_message.readwrite",
+  "kso.mcp_message.readwrite",
 ]);
 
 const REQUIRED_FIELDS = Object.freeze([
@@ -10,24 +15,31 @@ const REQUIRED_FIELDS = Object.freeze([
   ["WPS_APP_KEY", "WPS 开放平台应用 App Key"],
   ["WPS_REDIRECT_URI", "WPS OAuth 回调地址"],
   ["WPS_SCOPES", "WPS 授权范围"],
-  ["DEEPSEEK_MODEL", "DeepSeek 模型名称"],
-  ["DEEPSEEK_API_KEY", "DeepSeek API Key"],
+  ["LLM_PROVIDER", "模型服务商名称"],
+  ["LLM_BASE_URL", "模型 API 地址"],
+  ["LLM_MODEL", "模型名称或 Endpoint ID"],
+  ["LLM_API_KEY", "模型 API Key"],
 ]);
 
 function present(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function parseScopes(value) {
-  if (!present(value)) return [];
-  return [...new Set(value.split(/[\s,]+/u).map((item) => item.trim()).filter(Boolean))];
-}
-
 export function assessInstallConfig(environment = {}) {
+  const modelConfiguration = resolveModelConfiguration(environment);
+  const normalizedEnvironment = modelConfiguration.usedLegacyDeepSeek
+    ? {
+        ...environment,
+        LLM_PROVIDER: modelConfiguration.provider,
+        LLM_BASE_URL: modelConfiguration.baseUrl,
+        LLM_MODEL: modelConfiguration.model,
+        LLM_API_KEY: modelConfiguration.apiKey,
+      }
+    : environment;
   const missing = REQUIRED_FIELDS
-    .filter(([key]) => !present(environment[key]))
+    .filter(([key]) => !present(normalizedEnvironment[key]))
     .map(([key, label]) => ({ key, label }));
-  const scopes = parseScopes(environment.WPS_SCOPES);
+  const scopes = normalizeWpsScopes(environment.WPS_SCOPES);
   const localPort = Number(environment.LOCAL_PORT || 4310);
   const missingScopes = present(environment.WPS_SCOPES)
     ? REQUIRED_WPS_SCOPES.filter((scope) => !scopes.includes(scope))
@@ -49,10 +61,10 @@ export function assessInstallConfig(environment = {}) {
     });
   }
 
-  if (present(environment.DEEPSEEK_MODEL) && environment.DEEPSEEK_MODEL !== "deepseek-v4-pro") {
+  if (present(normalizedEnvironment.LLM_BASE_URL) && !validModelEndpoint(normalizedEnvironment.LLM_BASE_URL)) {
     blockers.push({
-      code: "unsupported_llm_provider",
-      message: "当前本地试用固定使用 DeepSeek V4 Pro；其他模型适配器尚未验证。",
+      code: "invalid_llm_base_url",
+      message: "LLM_BASE_URL 必须使用 HTTPS；本机模型可使用 127.0.0.1 或 localhost 的 HTTP 地址。",
     });
   }
 
@@ -66,8 +78,8 @@ export function assessInstallConfig(environment = {}) {
   const wpsReady = !missing.some((item) => item.key.startsWith("WPS_"))
     && missingScopes.length === 0
     && !blockers.some((item) => item.code.startsWith("invalid_redirect") || item.code.includes("wps") || item.code.includes("scope"));
-  const llmReady = !missing.some((item) => item.key.startsWith("DEEPSEEK_"))
-    && !blockers.some((item) => item.code === "unsupported_llm_provider");
+  const llmReady = !missing.some((item) => item.key.startsWith("LLM_"))
+    && !blockers.some((item) => item.code === "invalid_llm_base_url");
 
   const configurationReady = missing.length === 0 && blockers.length === 0;
 
@@ -88,8 +100,9 @@ export function assessInstallConfig(environment = {}) {
     notes: [
       "WPS_SID 不支持，也不应从浏览器复制；必须使用 WPS 开放平台 App ID、App Key 和用户 OAuth。",
       "每个企业或安装者使用自己的 WPS 应用、数据范围、审批和 OAuth，不复用维护者环境。",
+      ...(modelConfiguration.usedLegacyDeepSeek ? ["检测到旧版 DeepSeek 配置；本次仍可运行。若要迁移，请在本机打开 .env.local：将 DEEPSEEK_API_KEY 改名为 LLM_API_KEY、DEEPSEEK_MODEL 改名为 LLM_MODEL，并新增 LLM_PROVIDER=deepseek 与 LLM_BASE_URL=https://api.deepseek.com/chat/completions。不要发送或截图该文件。"] : []),
       "预检只能确认字段和权限名称是否齐全，不能证明应用已审批发布、用户 OAuth 已完成或模型服务可连接。",
-      "本地试用包含 WPS OAuth、只读会话消息导入和 DeepSeek 分析；机器人发送与公网后端不包含。",
+      "本地试用包含 WPS OAuth、只读会话消息导入和安装者所选 OpenAI-compatible 模型分析；机器人发送与公网后端不包含。",
     ],
   });
 }

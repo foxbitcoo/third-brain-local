@@ -15,6 +15,7 @@ import { isPublicCopyEntry } from "../scripts/standalone-policy.mjs";
 import { createLocalConfig } from "../src/config.mjs";
 import { createEncryptedLocalStore } from "../src/encrypted-store.mjs";
 import { createLocalHttpServer } from "../src/http-server.mjs";
+import { createOpenAiCompatibleAnalyzer } from "../src/openai-compatible.mjs";
 import { createLocalSetupServer } from "../src/setup-server.mjs";
 import {
   buildWpsAuthorizationUrl,
@@ -25,8 +26,104 @@ import { createWpsMessageClient } from "../src/wps-message-client.mjs";
 
 const REQUIRED_SCOPES = [
   "kso.user_base.read",
-  "delegated:kso.mcp_message.readwrite",
+  "kso.mcp_message.readwrite",
 ];
+
+test("WPS 权限导览使用后台可搜索的 scope，并明确两项都选择 user", async () => {
+  const setupPage = await readFile(
+    path.resolve(import.meta.dirname, "..", "public", "setup.html"),
+    "utf8",
+  );
+  const permissionGuide = await readFile(
+    path.resolve(import.meta.dirname, "..", "docs", "WPS-PERMISSIONS.md"),
+    "utf8",
+  );
+
+  for (const content of [setupPage, permissionGuide]) {
+    assert.match(content, /kso\.user_base\.read/u);
+    assert.match(content, /kso\.mcp_message\.readwrite/u);
+    assert.match(content, /选择[^。\n]*user|权限类型[^。\n]*user/u);
+    assert.match(content, /不要[^。\n]*delegated:/u);
+    assert.doesNotMatch(content, /申请[^。\n]*delegated:kso\.mcp_message\.readwrite/u);
+  }
+});
+
+test("安装者可以配置任意 OpenAI-compatible 服务商、接口地址和模型名称", async () => {
+  const requests = [];
+  const config = createLocalConfig({
+    ["WPS_APP_" + "ID"]: "installer-app-id",
+    ["WPS_APP_" + "KEY"]: "installer-app-secret",
+    WPS_REDIRECT_URI: "http://127.0.0.1:4310/oauth/wps/callback",
+    WPS_SCOPES: REQUIRED_SCOPES.join(" "),
+    LLM_PROVIDER: "volcano-ark",
+    LLM_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    LLM_MODEL: "ep-installer-owned-model",
+    ["LLM_API_" + "KEY"]: "installer-owned-model-key",
+  });
+  const analyzer = createOpenAiCompatibleAnalyzer({
+    ...config.model,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ summary: "摘要", candidates: [] }) } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  assert.equal(config.ready, true);
+  assert.equal(config.model.provider, "volcano-ark");
+  assert.equal(config.model.baseUrl, "https://ark.cn-beijing.volces.com/api/v3/chat/completions");
+  assert.equal(config.model.model, "ep-installer-owned-model");
+  assert.equal(JSON.stringify(config).includes("installer-owned-model-key"), false);
+  assert.deepEqual(await analyzer.analyze({ messages: [] }), { summary: "摘要", candidates: [] });
+  assert.equal(requests[0].url, config.model.baseUrl);
+  assert.equal(JSON.parse(requests[0].options.body).model, "ep-installer-owned-model");
+
+  assert.equal(createLocalConfig({
+    ["WPS_APP_" + "ID"]: "installer-app-id",
+    ["WPS_APP_" + "KEY"]: "installer-app-secret",
+    WPS_REDIRECT_URI: "http://127.0.0.1:4310/oauth/wps/callback",
+    WPS_SCOPES: REQUIRED_SCOPES.join(" "),
+    LLM_PROVIDER: "custom",
+    LLM_BASE_URL: "http://remote.example.invalid/v1/chat/completions",
+    LLM_MODEL: "custom-model",
+    ["LLM_API_" + "KEY"]: "installer-owned-model-key",
+  }).ready, false);
+});
+
+test("通用模型配置不串用旧 DeepSeek Key，完整旧配置仍可一致迁移", () => {
+  const commonWps = {
+    ["WPS_APP_" + "ID"]: "installer-app-id",
+    ["WPS_APP_" + "KEY"]: "installer-app-secret",
+    WPS_REDIRECT_URI: "http://127.0.0.1:4310/oauth/wps/callback",
+    WPS_SCOPES: REQUIRED_SCOPES.join(" "),
+  };
+  const mixed = {
+    ...commonWps,
+    LLM_PROVIDER: "volcano-ark",
+    LLM_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    LLM_MODEL: "ep-installer-model",
+    ["DEEPSEEK_API_" + "KEY"]: "legacy-deepseek-key",
+  };
+  assert.equal(createLocalConfig(mixed).ready, false);
+  assert.equal(createLocalConfig(mixed).missing.includes("LLM_API_KEY"), true);
+  assert.equal(assessInstallConfig(mixed).configurationReady, false);
+
+  const legacy = {
+    ...commonWps,
+    ["DEEPSEEK_API_" + "KEY"]: "legacy-deepseek-key",
+    DEEPSEEK_MODEL: "legacy-model-name",
+  };
+  const legacyConfig = createLocalConfig(legacy);
+  const legacyAssessment = assessInstallConfig(legacy);
+  assert.equal(legacyConfig.ready, true);
+  assert.equal(legacyConfig.model.provider, "deepseek");
+  assert.equal(legacyConfig.model.baseUrl, "https://api.deepseek.com/chat/completions");
+  assert.equal(legacyConfig.model.model, "legacy-model-name");
+  assert.equal(legacyAssessment.configurationReady, true);
+  assert.match(legacyAssessment.notes.join("\n"), /旧版.*LLM_/u);
+  assert.match(legacyAssessment.notes.join("\n"), /\.env\.local.*DEEPSEEK_API_KEY.*LLM_API_KEY/u);
+});
 
 test("安装预检在缺少外部用户自己的 WPS 与模型配置时给出选择题式引导", () => {
   const assessment = assessInstallConfig({});
@@ -40,8 +137,10 @@ test("安装预检在缺少外部用户自己的 WPS 与模型配置时给出选
       "WPS_APP_KEY",
       "WPS_REDIRECT_URI",
       "WPS_SCOPES",
-      "DEEPSEEK_MODEL",
-      "DEEPSEEK_API_KEY",
+      "LLM_PROVIDER",
+      "LLM_BASE_URL",
+      "LLM_MODEL",
+      "LLM_API_KEY",
     ],
   );
   assert.match(assessment.nextAction, /复制.*\.env\.example/);
@@ -56,8 +155,10 @@ test("安装预检校验最小权限并且报告不会输出密钥", () => {
     WPS_APP_KEY: secret,
     WPS_REDIRECT_URI: "http://127.0.0.1:4310/oauth/wps/callback",
     WPS_SCOPES: REQUIRED_SCOPES.join(" "),
-    DEEPSEEK_MODEL: "deepseek-v4-pro",
-    ["DEEPSEEK_API_" + "KEY"]: secret,
+    LLM_PROVIDER: "volcano-ark",
+    LLM_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    LLM_MODEL: "ep-installer-model",
+    ["LLM_API_" + "KEY"]: secret,
   });
   const report = formatInstallReport(assessment);
 
@@ -89,19 +190,27 @@ test("首次启动先展示可执行设置导览，并将安装者自己的凭�
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const installerSecret = "installer-owned-app-key";
-  const modelSecret = "installer-owned-deepseek-key";
+  const modelSecret = "installer-owned-model-key";
 
   try {
     const page = await (await fetch(origin)).text();
     assert.match(page, /先准备三样东西/);
     assert.match(page, /WPS 企业自建应用/);
-    assert.match(page, /DeepSeek API Key/);
+    assert.match(page, /大模型配置/);
+    assert.match(page, /模型名称或 Endpoint ID/);
     assert.match(page, /open\.wps\.cn/);
-    assert.match(page, /platform\.deepseek\.com\/api_keys/);
+    assert.match(page, /console\.volcengine\.com/);
 
     const initial = await (await fetch(`${origin}/api/setup/status`)).json();
     assert.equal(initial.configurationReady, false);
-    assert.deepEqual(initial.requiredFields, ["WPS_APP_ID", "WPS_APP_KEY", "DEEPSEEK_API_KEY"]);
+    assert.deepEqual(initial.requiredFields, [
+      "WPS_APP_ID",
+      "WPS_APP_KEY",
+      "LLM_PROVIDER",
+      "LLM_BASE_URL",
+      "LLM_MODEL",
+      "LLM_API_KEY",
+    ]);
 
     const hostile = await fetch(`${origin}/api/setup/save`, {
       method: "POST",
@@ -116,7 +225,10 @@ test("首次启动先展示可执行设置导览，并将安装者自己的凭�
       body: JSON.stringify({
         wpsAppId: "installer-owned-app-id",
         wpsAppKey: installerSecret,
-        deepseekApiKey: modelSecret,
+        llmProvider: "volcano-ark",
+        llmBaseUrl: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        llmModel: "ep-installer-model",
+        llmApiKey: modelSecret,
       }),
     });
     const savedPayload = await saved.json();
@@ -127,9 +239,11 @@ test("首次启动先展示可执行设置导览，并将安装者自己的凭�
     const persisted = await readFile(envFile, "utf8");
     const appIdKey = ["WPS", "APP", "ID"].join("_");
     const appKeyKey = ["WPS", "APP", "KEY"].join("_");
-    const modelKey = ["DEEPSEEK", "API", "KEY"].join("_");
+    const modelKey = ["LLM", "API", "KEY"].join("_");
     assert.match(persisted, new RegExp(`${appIdKey}=installer-owned-app-id`));
     assert.match(persisted, new RegExp(`${appKeyKey}=${installerSecret}`));
+    assert.match(persisted, /LLM_PROVIDER=volcano-ark/u);
+    assert.match(persisted, /LLM_MODEL=ep-installer-model/u);
     assert.match(persisted, new RegExp(`${modelKey}=${modelSecret}`));
     assert.equal((await stat(envFile)).mode & 0o777, 0o600);
   } finally {
@@ -192,7 +306,7 @@ test("当前公开候选目录满足必需文件与通用泄漏门禁", async ()
   assert.equal(result.ok, true);
 });
 
-test("本地配置只接受安装者自己的 WPS 应用与 DeepSeek V4 Pro Key", () => {
+test("本地配置只接受安装者自己的 WPS 应用与自选模型配置", () => {
   const installerAppSecret = ["installer", "app", "secret"].join("-");
   const installerModelKey = ["installer", "model", "key"].join("-");
   const config = createLocalConfig({
@@ -200,14 +314,16 @@ test("本地配置只接受安装者自己的 WPS 应用与 DeepSeek V4 Pro Key"
     ["WPS_APP_" + "KEY"]: installerAppSecret,
     WPS_REDIRECT_URI: "http://127.0.0.1:4310/oauth/wps/callback",
     WPS_SCOPES: REQUIRED_SCOPES.slice(0, 2).join(" "),
-    ["DEEPSEEK_API_" + "KEY"]: installerModelKey,
-    DEEPSEEK_MODEL: "deepseek-v4-pro",
+    LLM_PROVIDER: "custom-provider",
+    LLM_BASE_URL: "https://model.example.invalid/v1/chat/completions",
+    ["LLM_API_" + "KEY"]: installerModelKey,
+    LLM_MODEL: "installer-model",
   });
 
   assert.equal(config.ready, true);
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4310);
-  assert.deepEqual(config.wps.scopes, ["kso.user_base.read", "delegated:kso.mcp_message.readwrite"]);
+  assert.deepEqual(config.wps.scopes, REQUIRED_SCOPES);
   assert.equal(JSON.stringify(config).includes(installerAppSecret), false);
   assert.equal(JSON.stringify(config).includes(installerModelKey), false);
   assert.equal(createLocalConfig({
@@ -215,18 +331,20 @@ test("本地配置只接受安装者自己的 WPS 应用与 DeepSeek V4 Pro Key"
     ["WPS_APP_" + "KEY"]: installerAppSecret,
     WPS_REDIRECT_URI: "https://localhost:8443/arbitrary",
     WPS_SCOPES: REQUIRED_SCOPES.join(" "),
-    ["DEEPSEEK_API_" + "KEY"]: installerModelKey,
-    DEEPSEEK_MODEL: "deepseek-v4-pro",
+    LLM_PROVIDER: "custom-provider",
+    LLM_BASE_URL: "https://model.example.invalid/v1/chat/completions",
+    ["LLM_API_" + "KEY"]: installerModelKey,
+    LLM_MODEL: "installer-model",
     LOCAL_PORT: "4310",
   }).ready, false);
 });
 
-test("WPS OAuth 使用随机 state、去掉 delegated 前缀且不会请求 app scope", async () => {
+test("WPS OAuth 使用随机 state、使用 user scope 且不会请求 app scope", async () => {
   const installerAppSecret = ["installer", "app", "secret"].join("-");
   const authorization = buildWpsAuthorizationUrl({
     appId: "installer-app-id",
     redirectUri: "http://127.0.0.1:4310/oauth/wps/callback",
-    scopes: ["kso.user_base.read", "delegated:kso.mcp_message.readwrite"],
+    scopes: REQUIRED_SCOPES,
     state: "fixed-test-state",
   });
   const url = new URL(authorization.url);

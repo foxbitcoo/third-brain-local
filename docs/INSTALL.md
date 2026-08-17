@@ -4,14 +4,14 @@
 
 - Node.js 20 或更高；
 - WPS 企业自建应用；
-- DeepSeek API Key。
+- OpenAI-compatible 模型 API：服务商、完整 API 地址、模型名称／Endpoint ID 和 API Key。
 
 ```bash
 npm install
 npm start
 ```
 
-首次启动会在终端显示 `http://127.0.0.1:4310`。用浏览器打开该地址后进入网页设置导览，依次说明 WPS 应用、权限、回调地址和 DeepSeek Key 的获取位置。三个需要保密的值会通过本地页面写入权限为 600 的 `.env.local`；页面不会再把密钥读出来。
+首次启动会在终端显示 `http://127.0.0.1:4310`。用浏览器打开该地址后进入网页设置导览，依次说明 WPS 应用、权限、回调地址和模型配置。配置会通过本地页面写入权限为 600 的 `.env.local`；页面不会再把密钥读出来。
 
 保存后，在终端按 Control + C 停止服务，再次运行 `npm start` 进入 WPS 授权与群聊选择页面。
 
@@ -23,9 +23,11 @@ npm start
 WPS_APP_ID=
 WPS_APP_KEY=
 WPS_REDIRECT_URI=http://127.0.0.1:4310/oauth/wps/callback
-WPS_SCOPES=kso.user_base.read delegated:kso.mcp_message.readwrite
-DEEPSEEK_API_KEY=
-DEEPSEEK_MODEL=deepseek-v4-pro
+WPS_SCOPES=kso.user_base.read kso.mcp_message.readwrite
+LLM_PROVIDER=deepseek
+LLM_BASE_URL=https://api.deepseek.com/chat/completions
+LLM_MODEL=
+LLM_API_KEY=
 LOCAL_PORT=4310
 ```
 
@@ -39,7 +41,7 @@ LOCAL_PORT=4310
 http://127.0.0.1:4310/oauth/wps/callback
 ```
 
-申请并发布两个用户侧权限，随后当前用户重新授权。详见 [WPS 权限](WPS-PERMISSIONS.md)。
+分别搜索 `kso.user_base.read` 和 `kso.mcp_message.readwrite`，两项都选择 `user`，不要选择 `app`，也不要输入 `delegated:`。申请并发布后，当前用户重新授权。详见 [WPS 权限](WPS-PERMISSIONS.md)。
 
 ## 4. 预检与启动
 
