@@ -19,6 +19,12 @@
 
 当前仓库使用 [GNU Affero General Public License v3.0](LICENSE)。开源许可只适用于本仓库代码，不授权或要求公开任何安装者的 WPS 数据、模型 Key 或本地记忆。
 
+## 问题反馈边界
+
+公开版将提供 **Report to Issue**：安装者可以让自己的 Agent 在本机生成问题草稿，先完成隐私扫描和脱敏，再完整预览正文、截图与附件；只有安装者明确确认后，才使用安装者自己的 GitHub 身份提交到本仓库的公开 Issue 池。
+
+安全问题、公司内部信息、办公原文、人员与群聊信息、凭证、数据库和本地运行产物不得提交公开 Issue。当前 Alpha **尚未实现自动提交 GitHub Issue**；在正式闭环上线前，请先人工检查并手动提交，不要把产品承诺误解为已经接通的外部写入能力。
+
 ## 五分钟开始
 
 需要：Node.js 20+、一个 WPS 企业自建应用，以及一套 OpenAI-compatible 模型 API 配置。
@@ -98,4 +104,4 @@ npm run release:gate -- --denylist /absolute/private/denylist.txt
 
 由于发布环境没有安装者的 WPS 应用、OAuth 和模型 Key，以下必须由每位试用者首次运行时验证：WPS 权限审批、真实 OAuth、会话读取、消息分页、所选模型请求与结果质量。未验证能力不会写成已完成。
 
-进一步阅读：[安装](docs/INSTALL.md) · [架构](docs/ARCHITECTURE.md) · [模型配置](docs/MODEL-CONFIG.md) · [首版限制](docs/PREVIEW-LIMITS.md)
+进一步阅读：[安装](docs/INSTALL.md) · [架构](docs/ARCHITECTURE.md) · [模型配置](docs/MODEL-CONFIG.md) · [首版限制](docs/PREVIEW-LIMITS.md) · [隐私说明](docs/PRIVACY.md)

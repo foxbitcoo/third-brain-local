@@ -47,6 +47,27 @@ test("公开版明确是可安装产品版，并声明 AGPL-3.0 与个人版单�
   assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/u);
 });
 
+test("公开版冻结 Report to Issue 的本地隐私门禁，但不把未接通的自动提交写成完成", async () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const [readme, privacy, releaseSource] = await Promise.all([
+    readFile(path.join(root, "README.md"), "utf8"),
+    readFile(path.join(root, "docs", "PRIVACY.md"), "utf8"),
+    readFile(path.join(root, "docs", "RELEASE-SOURCE.md"), "utf8"),
+  ]);
+
+  for (const content of [readme, privacy]) {
+    assert.match(content, /Report to Issue/u);
+    assert.match(content, /本机|本地/u);
+    assert.match(content, /隐私扫描/u);
+    assert.match(content, /完整预览/u);
+    assert.match(content, /自己的 GitHub 身份/u);
+    assert.match(content, /尚未.*自动.*(?:GitHub|Issue)/su);
+  }
+
+  assert.match(releaseSource, /个人版.*公开版.*Report to Issue/su);
+  assert.match(releaseSource, /不包含.*真实数据.*竞品研究材料/su);
+});
+
 test("WPS 权限导览使用后台可搜索的 scope，并明确两项都选择 user", async () => {
   const setupPage = await readFile(
     path.resolve(import.meta.dirname, "..", "public", "setup.html"),
