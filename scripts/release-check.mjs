@@ -3,6 +3,7 @@ import path from "node:path";
 
 const REQUIRED_FILES = Object.freeze([
   "README.md",
+  "LICENSE",
   ".env.example",
   "package.json",
   "package-lock.json",
@@ -27,9 +28,10 @@ const REQUIRED_FILES = Object.freeze([
   "docs/PREVIEW-LIMITS.md",
 ]);
 
-const TEXT_EXTENSIONS = new Set([".md", ".html", ".css", ".js", ".mjs", ".json", ".example", ".gitignore"]);
+const TEXT_EXTENSIONS = new Set([".md", ".html", ".css", ".js", ".mjs", ".json", ".example", ".gitignore", ".txt"]);
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_TOTAL_BYTES = 5_000_000;
+const PLACEHOLDER = /^(?:<[^>]+>|(?:your|replace|example|shared|independent|synthetic|test|fake)[_-]|\$\{|\*{3}|\/(?:kso_|gh\(\?:|authorization\[)|\/[^\r\n]+\/[a-z]*;?$)/iu;
 
 async function listFiles(root, relative = "") {
   const directory = path.join(root, relative);
@@ -49,25 +51,27 @@ function addPatternFindings(findings, relative, content, extension) {
     ["private_absolute_path", /(?:\/Users\/[^/\s]+\/|\/home\/[^/\s]+\/|[A-Za-z]:\\Users\\[^\\\s]+\\)/u],
     ["private_cloud_link", /https?:\/\/[^\s)"']*(?:feishu\.cn|kdocs\.cn)\/(?:docx|wiki|base|l)\/[^\s)"']+/iu],
     ["wps_access_token", /kso_(?:ac|rt)_[A-Za-z0-9._-]{12,}/u],
+    ["github_token", /gh(?:p|o|u|s|r)_[A-Za-z0-9]{20,}/u],
+    ["private_key", /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/u],
     ["cookie_header", /(?:^|\n)\s*(?:cookie|set-cookie)\s*:\s*[^\n]+/iu],
   ];
   for (const [code, expression] of patterns) {
     if (expression.test(content)) findings.push({ code, file: relative });
   }
 
-  const quotedAssignment = /(?:WPS_APP_ID|WPS_APP_KEY|WPS_ACCESS_TOKEN|WPS_REFRESH_TOKEN|WPS_SID|LLM_API_KEY|[A-Z0-9_]+_(?:TOKEN|SECRET|API_KEY|APP_KEY))[ \t]*[:=][ \t]*(["'`])([^"'`\r\n]{8,})\1/gu;
+  const quotedAssignment = /(?:WPS_APP_ID|WPS_APP_KEY|WPS_ACCESS_TOKEN|WPS_REFRESH_TOKEN|WPS_SID|LLM_API_KEY|OAUTH_CODE|[A-Z0-9_]+_(?:TOKEN|SECRET|API_KEY|APP_KEY|OAUTH_CODE))[ \t]*[:=][ \t]*(["'`])([^"'`\r\n]{8,})\1/gu;
   for (const match of content.matchAll(quotedAssignment)) {
     const value = match[2];
-    if (!/^(?:<[^>]+>|your[_-]|replace[_-]|example[_-]|\$\{|\*{3})/iu.test(value)) {
+    if (!PLACEHOLDER.test(value)) {
       findings.push({ code: "credential_assignment", file: relative });
       break;
     }
   }
 
-  const bareAssignment = /(?:WPS_APP_ID|WPS_APP_KEY|WPS_ACCESS_TOKEN|WPS_REFRESH_TOKEN|WPS_SID|LLM_API_KEY|DEEPSEEK_API_KEY|[A-Z0-9_]+_(?:TOKEN|SECRET|API_KEY|APP_KEY))[ \t]*=[ \t]*([^\s"'`]+)/giu;
+  const bareAssignment = /(?:WPS_APP_ID|WPS_APP_KEY|WPS_ACCESS_TOKEN|WPS_REFRESH_TOKEN|WPS_SID|LLM_API_KEY|DEEPSEEK_API_KEY|OAUTH_CODE|[A-Z0-9_]+_(?:TOKEN|SECRET|API_KEY|APP_KEY|OAUTH_CODE))[ \t]*=[ \t]*([^\s"'`]+)/giu;
   for (const match of content.matchAll(bareAssignment)) {
     const value = match[1];
-    if (!/^(?:<[^>]+>|your[_-]|replace[_-]|example[_-]|\$\{|\*{3})/iu.test(value)) {
+    if (!PLACEHOLDER.test(value)) {
       findings.push({ code: "credential_assignment", file: relative });
       break;
     }
@@ -117,7 +121,11 @@ export async function checkPublicRelease(root, options = {}) {
     if (metadata.size > MAX_FILE_BYTES) findings.push({ code: "file_too_large", file: relative });
 
     const basename = path.basename(relative);
-    const extension = basename === ".gitignore" ? ".gitignore" : path.extname(relative).toLowerCase();
+    const extension = basename === ".gitignore"
+      ? ".gitignore"
+      : basename === "LICENSE"
+        ? ".txt"
+        : path.extname(relative).toLowerCase();
     if (/^\.env(?:\..+)?$/u.test(basename) && basename !== ".env.example") {
       findings.push({ code: "private_environment_file", file: relative });
     }
