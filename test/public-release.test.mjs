@@ -29,6 +29,24 @@ const REQUIRED_SCOPES = [
   "kso.mcp_message.readwrite",
 ];
 
+test("公开版明确是可安装产品版，并声明 AGPL-3.0 与个人版单向发布边界", async () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const [readme, privacy, packageJson, license] = await Promise.all([
+    readFile(path.join(root, "README.md"), "utf8"),
+    readFile(path.join(root, "docs", "PRIVACY.md"), "utf8"),
+    readFile(path.join(root, "package.json"), "utf8").then(JSON.parse),
+    readFile(path.join(root, "LICENSE"), "utf8"),
+  ]);
+
+  assert.match(readme, /公开版/u);
+  assert.match(readme, /Local-first/u);
+  assert.match(readme, /个人版.*隐私扫描.*公开版/su);
+  assert.doesNotMatch(readme, /公开版只是.*(?:Demo|演示)/u);
+  assert.match(privacy, /私有仓库.*(?:Key|凭证).*不得/su);
+  assert.equal(packageJson.license, "AGPL-3.0");
+  assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/u);
+});
+
 test("WPS 权限导览使用后台可搜索的 scope，并明确两项都选择 user", async () => {
   const setupPage = await readFile(
     path.resolve(import.meta.dirname, "..", "public", "setup.html"),
@@ -280,6 +298,9 @@ test("发布检查覆盖 HTML、JS 与 MJS 中的字面量凭证赋值", async (
   await writeFile(path.join(root, "demo", "template.mjs"), "const LLM_API_" + `KEY = ${backtick}template-secret-value${backtick};\n`, "utf8");
   await writeFile(path.join(root, "demo", "comment.mjs"), "// WPS_APP_" + "KEY=comment-secret-value\n", "utf8");
   await writeFile(path.join(root, "demo", "bearer.mjs"), "// Authorization: " + "Bearer literal-token-value\n", "utf8");
+  await writeFile(path.join(root, "demo", "oauth.mjs"), "const OAUTH_" + "CODE=actual-oauth-code-value\n", "utf8");
+  await writeFile(path.join(root, "demo", "pat.txt"), ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_") + "\n", "utf8");
+  await writeFile(path.join(root, "demo", "key.txt"), ["-----BEGIN", "PRIVATE KEY-----"].join(" ") + "\n", "utf8");
 
   const result = await checkPublicRelease(root);
 
@@ -288,6 +309,9 @@ test("发布检查覆盖 HTML、JS 与 MJS 中的字面量凭证赋值", async (
   assert.equal(result.findings.some((item) => item.code === "credential_assignment" && item.file === "demo/template.mjs"), true);
   assert.equal(result.findings.some((item) => item.code === "credential_assignment" && item.file === "demo/comment.mjs"), true);
   assert.equal(result.findings.some((item) => item.code === "bearer_token_literal" && item.file === "demo/bearer.mjs"), true);
+  assert.equal(result.findings.some((item) => item.code === "credential_assignment" && item.file === "demo/oauth.mjs"), true);
+  assert.equal(result.findings.some((item) => item.code === "github_token" && item.file === "demo/pat.txt"), true);
+  assert.equal(result.findings.some((item) => item.code === "private_key" && item.file === "demo/key.txt"), true);
 });
 
 test("独立副本排除所有本地环境、包管理器凭证和依赖目录", () => {
@@ -595,6 +619,12 @@ test("公开 Git 历史使用同一私人 denylist 检出已删除内容", async
   await unlink(path.join(root, "removed.txt"));
   assert.equal(runGit(["add", "-u"]).status, 0);
   assert.equal(runGit(["commit", "-m", "remove"]).status, 0);
+  await writeFile(path.join(root, ".env.local"), "PRIVATE_VALUE=history-only\n", "utf8");
+  assert.equal(runGit(["add", ".env.local"]).status, 0);
+  assert.equal(runGit(["commit", "-m", "temporary environment"]).status, 0);
+  await unlink(path.join(root, ".env.local"));
+  assert.equal(runGit(["add", "-u"]).status, 0);
+  assert.equal(runGit(["commit", "-m", "remove environment"]).status, 0);
   await writeFile(denylist, `${privateLiteral}\n`, { encoding: "utf8", mode: 0o600 });
 
   const result = spawnSync(process.execPath, [
@@ -604,4 +634,17 @@ test("公开 Git 历史使用同一私人 denylist 检出已删除内容", async
   ], { cwd: root, encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /private_denylist_match/);
+  assert.match(result.stderr, /private_environment_file/);
+});
+
+test("发布总门强制要求私人 denylist", async () => {
+  const repositoryRoot = path.resolve(import.meta.dirname, "..");
+  const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8"));
+  assert.equal(packageJson.scripts["release:gate"], "node scripts/release-gate.mjs");
+  const result = spawnSync(process.execPath, ["scripts/release-gate.mjs"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--denylist/);
 });
