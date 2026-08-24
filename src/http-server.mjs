@@ -56,6 +56,7 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       }
       if (request.method === "GET" && url.pathname === "/api/status") return json(response, 200, await runtime.status());
       if (request.method === "GET" && url.pathname === "/api/workspace") return json(response, 200, await runtime.readWorkspace());
+      if (request.method === "GET" && url.pathname === "/api/public-workbench") return json(response, 200, await runtime.readPublicWorkbench());
       if (request.method === "POST" && url.pathname === "/oauth/wps/start") {
         assertSameOriginJson(request);
         return json(response, 200, { url: runtime.beginAuthorization().url });
@@ -78,6 +79,33 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "POST" && url.pathname === "/api/judgments") {
         assertSameOriginJson(request);
         return json(response, 200, await runtime.saveJudgment(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/conflicts") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.confirmPublicConflict(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.draftPublicIssue(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/confirm") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.confirmPublicIssue(await body(request)));
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/api/public-workbench/reports/")) {
+        const draftId = url.pathname.slice("/api/public-workbench/reports/".length);
+        if (draftId && !draftId.includes("/")) return json(response, 200, await runtime.readPublicIssue({ draftId }));
+      }
+      if (request.method === "GET" && url.pathname === "/api/public-workbench/report-history") {
+        return json(response, 200, await runtime.readPublicIssueHistory({ draftId: url.searchParams.get("draftId") }));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/correct") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.correctPublicIssue(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/revoke") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.revokePublicIssueConfirmation(await body(request)));
       }
       json(response, 404, { error: "not_found" });
     } catch (error) {

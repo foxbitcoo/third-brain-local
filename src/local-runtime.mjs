@@ -1,5 +1,6 @@
 import { buildWpsAuthorizationUrl, exchangeWpsAuthorizationCode } from "./wps-oauth.mjs";
 import { createWpsMessageClient } from "./wps-message-client.mjs";
+import { createPublicCandidateWorkbench } from "./public-workbench.mjs";
 
 export function createLocalTrialRuntime({
   config,
@@ -7,6 +8,7 @@ export function createLocalTrialRuntime({
   oauth,
   wpsClientFactory = (options) => createWpsMessageClient(options),
   inference,
+  localPrivacyScanner,
   now = () => new Date(),
 }) {
   let authorizationState;
@@ -24,6 +26,7 @@ export function createLocalTrialRuntime({
       code,
     }),
   };
+  const publicWorkbench = createPublicCandidateWorkbench({ store, now, localPrivacyScanner });
 
   async function credentials() {
     const value = await store.read("credentials");
@@ -144,6 +147,33 @@ export function createLocalTrialRuntime({
         sources: workspace.sources || [],
         analysis: workspace.analysis || null,
       };
+    },
+    async readPublicWorkbench() {
+      return publicWorkbench.read();
+    },
+    async confirmPublicConflict(input) {
+      return publicWorkbench.confirmConflict(input);
+    },
+    async draftPublicIssue(input) {
+      return publicWorkbench.draftReport(input);
+    },
+    async confirmPublicIssue(input) {
+      return publicWorkbench.confirmReport(input);
+    },
+    async readPublicIssue(input) {
+      return publicWorkbench.readReport(input);
+    },
+    async readLatestPublicIssue(input) {
+      return publicWorkbench.readLatestReport(input);
+    },
+    async correctPublicIssue(input) {
+      return publicWorkbench.correctReport(input);
+    },
+    async revokePublicIssueConfirmation(input) {
+      return publicWorkbench.revokeReportConfirmation(input);
+    },
+    async readPublicIssueHistory(input) {
+      return publicWorkbench.readReportHistory(input);
     },
   });
 }

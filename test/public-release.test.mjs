@@ -22,6 +22,8 @@ import {
   exchangeWpsAuthorizationCode,
 } from "../src/wps-oauth.mjs";
 import { createLocalTrialRuntime } from "../src/local-runtime.mjs";
+import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
+import { SYNTHETIC_CANDIDATES, createPublicCandidateWorkbench, validateCandidateSet } from "../src/public-workbench.mjs";
 import { createWpsMessageClient } from "../src/wps-message-client.mjs";
 
 const REQUIRED_SCOPES = [
@@ -60,8 +62,8 @@ test("公开版冻结 Report to Issue 的本地隐私门禁，但不把未接通
     assert.match(content, /本机|本地/u);
     assert.match(content, /隐私扫描/u);
     assert.match(content, /完整预览/u);
-    assert.match(content, /自己的 GitHub 身份/u);
-    assert.match(content, /尚未.*自动.*(?:GitHub|Issue)/su);
+    assert.match(content, /本地草稿/u);
+    assert.match(content, /(?:没有|尚未).*?(?:GitHub|外部)/su);
   }
 
   assert.match(releaseSource, /个人版.*公开版.*Report to Issue/su);
@@ -288,6 +290,126 @@ test("首次启动先展示可执行设置导览，并将安装者自己的凭�
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("首次设置不默认绑定任何模型服务商、地址或模型名称", async () => {
+  const [setupPage, example] = await Promise.all([
+    readFile(path.resolve(import.meta.dirname, "..", "public", "setup.html"), "utf8"),
+    readFile(path.resolve(import.meta.dirname, "..", ".env.example"), "utf8"),
+  ]);
+
+  assert.doesNotMatch(setupPage, /id="llmProvider"[^>]*\svalue=/u);
+  assert.doesNotMatch(setupPage, /id="llmBaseUrl"[^>]*\svalue=/u);
+  assert.doesNotMatch(setupPage, /id="llmModel"[^>]*\svalue=/u);
+  assert.match(example, /^LLM_PROVIDER=$/mu);
+  assert.match(example, /^LLM_BASE_URL=$/mu);
+});
+
+test("公开工作台提供响应式决策、来源、关系和设置拓扑", async () => {
+  const page = await readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8");
+  for (const target of ["#home", "#decisions", "#sources", "#relationships", "#settings"]) assert.match(page, new RegExp(target));
+  for (const sectionId of ["id=\"decisions\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\""]) assert.match(page, new RegExp(sectionId));
+  assert.match(page, /workspace-header/u);
+  assert.match(page, /@media\(max-width:900px\)/u);
+  assert.match(page, /@media\(max-width:390px\)/u);
+  assert.match(page, /width:288px/u);
+  assert.match(page, /navToggle/u);
+  assert.match(page, /history\.back\(\)/u);
+  assert.match(page, /c\.conflictingClaims\?/u);
+});
+
+test("工作台导航位于粘性页头之上，且页头背景不拦截路由点击", async () => {
+  const page = await readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8");
+
+  assert.match(page, /\.workspace-header\{[^}]*z-index:1[^}]*pointer-events:none/u);
+  assert.match(page, /\.workspace-header>\*\{pointer-events:auto\}/u);
+  assert.match(page, /@media\(min-width:901px\)\{[\s\S]*?\.workbench-nav\{[^}]*position:fixed[^}]*z-index:20/u);
+  assert.match(page, /\.workbench-nav\.open\{[^}]*position:fixed[^}]*z-index:21/u);
+});
+
+test("公开合成工作台仅接受精确 7/7 谱系，并在歧义时失败关闭", () => {
+  assert.deepEqual(validateCandidateSet(), { accepted: true, reason: "synthetic_7_of_7" });
+  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.slice(0, 6)).accepted, false);
+  assert.equal(validateCandidateSet([...SYNTHETIC_CANDIDATES.slice(0, 6), SYNTHETIC_CANDIDATES[0]]).accepted, false);
+  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 3 ? { ...item, evidence: { ...item.evidence, fingerprint: "a".repeat(64) } } : item)).reason, "candidate_evidence_mismatch");
+  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 1 ? { ...item, id: "synthetic-candidate-other" } : item)).reason, "candidate_identity_or_type_mismatch");
+  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 1 ? { ...item, eventType: "not-frozen" } : item)).reason, "candidate_identity_or_type_mismatch");
+});
+
+test("实际本地报告扫描器返回有限规则的可验证 receipt", () => {
+  const scanner = createLocalReportPrivacyScanner();
+  const clean = scanner.scan({ issue: { title: "中性本地草稿", body: "只用于完整预览。" } });
+  assert.equal(clean.status, "passed");
+  assert.equal(clean.findingCodes.length, 0);
+  assert.match(clean.denylistDigest, /^[a-f0-9]{64}$/u);
+  const blocked = scanner.scan({ issue: { title: "本地草稿", body: "api_key=sample-placeholder" } });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.findingCodes.includes("credential"), true);
+});
+
+test("公开合成工作台要求三字段冲突裁决，报告只在本地扫描、预览和确认", async () => {
+  const data = new Map();
+  const store = {
+    async read(key) { return data.get(key); },
+    async write(key, value) { data.set(key, structuredClone(value)); },
+  };
+  const workbench = createPublicCandidateWorkbench({
+    store,
+    now: () => new Date("2026-08-24T00:00:00.000Z"),
+    localPrivacyScanner: { scan: () => ({ status: "passed", scannerVersion: "synthetic-scanner", denylistDigest: "d".repeat(64), findingCodes: [] }) },
+  });
+  const initial = await workbench.read();
+  assert.equal(initial.candidates.length, 7);
+  assert.equal(initial.candidates.every((candidate) => candidate.lineage.status === "synthetic_7_of_7"), true);
+  assert.equal(initial.automaticStateChanges, false);
+  await assert.rejects(
+    workbench.confirmConflict({ candidateId: "synthetic-candidate-06", eventType: "决策变化", businessStatement: "中性业务事实", occurredAt: "" }),
+    /发生时间/,
+  );
+  const conflict = await workbench.confirmConflict({
+    candidateId: "synthetic-candidate-06",
+    eventType: "决策变化",
+    businessStatement: "中性业务事实",
+    occurredAt: "2026-01-01T09:00:00.000Z",
+  });
+  assert.equal(conflict.confirmed, true);
+  assert.equal(conflict.semantics, "candidate_only");
+  assert.deepEqual(conflict.conflict, {
+    candidateId: "synthetic-candidate-06",
+    eventType: "决策变化",
+    businessStatement: "中性业务事实",
+    occurredAt: "2026-01-01T09:00:00.000Z",
+    confirmedAt: "2026-08-24T00:00:00.000Z",
+  });
+
+  const blocked = await workbench.draftReport({
+    candidateId: "synthetic-candidate-01",
+    title: "本地草稿",
+    body: "api_key=sample-placeholder",
+  });
+  assert.equal(blocked.draft.privacy.status, "blocked");
+  assert.equal(blocked.preview.body.includes("sample-placeholder"), false);
+  assert.equal(JSON.stringify(await store.read("public-workbench")).includes("sample-placeholder"), false);
+  await assert.rejects(
+    workbench.confirmReport({ draftId: blocked.draft.id, previewDigest: blocked.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" }),
+    /隐私门禁/,
+  );
+
+  const safe = await workbench.draftReport({
+    candidateId: "synthetic-candidate-01",
+    title: "合成候选反馈",
+    body: "这是中性本地草稿，只用于确认预览流程。",
+  });
+  assert.equal(safe.draft.privacy.status, "passed");
+  await assert.rejects(
+    workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "确认" }),
+    /明确确认/,
+  );
+  const confirmed = await workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" });
+  assert.equal(confirmed.confirmed, true);
+  assert.equal(confirmed.submission, "NOT_IMPLEMENTED");
+  const repeated = await workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" });
+  assert.deepEqual(repeated.receipt, confirmed.receipt);
 });
 
 test("发布检查拒绝凭证、私人绝对路径、私有云文档链接和数据文件", async () => {

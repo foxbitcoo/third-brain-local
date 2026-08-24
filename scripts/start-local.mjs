@@ -6,6 +6,7 @@ import { createOpenAiCompatibleAnalyzer } from "../src/openai-compatible.mjs";
 import { createEncryptedLocalStore } from "../src/encrypted-store.mjs";
 import { readEnvFile } from "../src/env-file.mjs";
 import { createLocalHttpServer } from "../src/http-server.mjs";
+import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
 import { createLocalTrialRuntime } from "../src/local-runtime.mjs";
 import { createLocalSetupServer } from "../src/setup-server.mjs";
 
@@ -25,6 +26,7 @@ if (!config.ready) {
     config,
     store,
     inference: createOpenAiCompatibleAnalyzer(config.model),
+    localPrivacyScanner: createLocalReportPrivacyScanner(),
   });
   server = createLocalHttpServer({ runtime, indexFile: new URL("../public/index.html", import.meta.url) });
 }
