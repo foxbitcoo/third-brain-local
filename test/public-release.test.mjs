@@ -24,6 +24,7 @@ import {
 import { createLocalTrialRuntime } from "../src/local-runtime.mjs";
 import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
 import { SYNTHETIC_CANDIDATES, createPublicCandidateWorkbench, validateCandidateSet } from "../src/public-workbench.mjs";
+import { PUBLIC_CANDIDATE_MANIFEST } from "../src/public-workbench-manifest.mjs";
 import { createWpsMessageClient } from "../src/wps-message-client.mjs";
 
 const REQUIRED_SCOPES = [
@@ -327,20 +328,98 @@ test("工作台导航位于粘性页头之上，且页头背景不拦截路由�
   assert.match(page, /\.workbench-nav\.open\{[^}]*position:fixed[^}]*z-index:21/u);
 });
 
-test("公开合成工作台仅接受精确 7/7 谱系，并在歧义时失败关闭", () => {
+function mutateCandidate(candidateIndex, mutate) {
+  const candidates = structuredClone(SYNTHETIC_CANDIDATES);
+  mutate(candidates[candidateIndex]);
+  return candidates;
+}
+
+test("公开 7/7 manifest 使用独立冻结的 manifest 与集合 digest", () => {
+  assert.equal(
+    PUBLIC_CANDIDATE_MANIFEST.manifestDigest,
+    "35e02f1881c657266b1adc000577d7b54fac00c73df864847ffef3725ed396b4",
+  );
+  assert.equal(
+    PUBLIC_CANDIDATE_MANIFEST.setDigest,
+    "e6a97eaf624d70ac907fd7478ebd2de460539a027bbbd0f30393584531afd88b",
+  );
+  assert.equal(PUBLIC_CANDIDATE_MANIFEST.candidates.length, 7);
+  assert.equal(Object.isFrozen(PUBLIC_CANDIDATE_MANIFEST), true);
+  assert.equal(Object.isFrozen(PUBLIC_CANDIDATE_MANIFEST.candidates[0]), true);
+});
+
+test("冻结 manifest 拒绝每个候选的逐字段业务篡改", () => {
+  const scalarFields = [
+    "id",
+    "title",
+    "businessChange",
+    "rule",
+    "question",
+    "sourceLabel",
+    "participantLabel",
+    "eventType",
+    "occurredAt",
+    "minimumEvidence",
+    "recommendation",
+  ];
+  for (const field of scalarFields) {
+    const candidates = mutateCandidate(0, (candidate) => {
+      candidate[field] = `${candidate[field]}-tampered`;
+    });
+    assert.equal(validateCandidateSet(candidates).accepted, false, field);
+  }
+
+  for (const [claimIndex, field] of [[0, "statement"], [0, "sourceLabel"], [1, "statement"], [1, "sourceLabel"]]) {
+    const candidates = mutateCandidate(5, (candidate) => {
+      candidate.conflictingClaims[claimIndex][field] += "-tampered";
+    });
+    assert.equal(validateCandidateSet(candidates).accepted, false, `conflictingClaims[${claimIndex}].${field}`);
+  }
+  assert.equal(validateCandidateSet(mutateCandidate(0, (candidate) => {
+    candidate.unexpectedBusinessField = "tampered";
+  })).accepted, false);
+});
+
+test("冻结 manifest 拒绝候选顺序、重复与缺失", () => {
   assert.deepEqual(validateCandidateSet(), { accepted: true, reason: "synthetic_7_of_7" });
   assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.slice(0, 6)).accepted, false);
   assert.equal(validateCandidateSet([...SYNTHETIC_CANDIDATES.slice(0, 6), SYNTHETIC_CANDIDATES[0]]).accepted, false);
-  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 3 ? { ...item, evidence: { ...item.evidence, fingerprint: "a".repeat(64) } } : item)).reason, "candidate_evidence_mismatch");
-  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 1 ? { ...item, id: "synthetic-candidate-other" } : item)).reason, "candidate_identity_or_type_mismatch");
-  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.map((item, index) => index === 1 ? { ...item, eventType: "not-frozen" } : item)).reason, "candidate_identity_or_type_mismatch");
+  assert.equal(validateCandidateSet([
+    SYNTHETIC_CANDIDATES[1],
+    SYNTHETIC_CANDIDATES[0],
+    ...SYNTHETIC_CANDIDATES.slice(2),
+  ]).accepted, false);
 });
 
-test("实际本地报告扫描器返回有限规则的可验证 receipt", () => {
+test("冻结 manifest 拒绝最小证据、证据集合与冲突证据篡改", () => {
+  for (const field of ["id", "revision", "fingerprint"]) {
+    const candidates = mutateCandidate(3, (candidate) => {
+      candidate.evidence[field] = field === "fingerprint"
+        ? "a".repeat(64)
+        : `${candidate.evidence[field]}-tampered`;
+    });
+    assert.equal(validateCandidateSet(candidates).accepted, false, `evidence.${field}`);
+  }
+  assert.equal(validateCandidateSet(mutateCandidate(3, (candidate) => {
+    delete candidate.evidence.revision;
+  })).accepted, false);
+  assert.equal(validateCandidateSet(mutateCandidate(3, (candidate) => {
+    candidate.evidence.unexpectedEvidenceField = "tampered";
+  })).accepted, false);
+  assert.equal(validateCandidateSet(mutateCandidate(5, (candidate) => {
+    candidate.conflictingClaims.reverse();
+  })).accepted, false);
+  assert.equal(validateCandidateSet(mutateCandidate(5, (candidate) => {
+    candidate.conflictingClaims[0].unexpectedClaimField = "tampered";
+  })).accepted, false);
+});
+
+test("公开安装缺少私人 denylist 时本地报告扫描器明确失败关闭", () => {
   const scanner = createLocalReportPrivacyScanner();
   const clean = scanner.scan({ issue: { title: "中性本地草稿", body: "只用于完整预览。" } });
-  assert.equal(clean.status, "passed");
-  assert.equal(clean.findingCodes.length, 0);
+  assert.equal(clean.status, "blocked");
+  assert.equal(clean.coverage, "generic_patterns_only");
+  assert.equal(clean.findingCodes.includes("private_denylist_unavailable"), true);
   assert.match(clean.denylistDigest, /^[a-f0-9]{64}$/u);
   const blocked = scanner.scan({ issue: { title: "本地草稿", body: "api_key=sample-placeholder" } });
   assert.equal(blocked.status, "blocked");
@@ -356,7 +435,7 @@ test("公开合成工作台要求三字段冲突裁决，报告只在本地扫�
   const workbench = createPublicCandidateWorkbench({
     store,
     now: () => new Date("2026-08-24T00:00:00.000Z"),
-    localPrivacyScanner: { scan: () => ({ status: "passed", scannerVersion: "synthetic-scanner", denylistDigest: "d".repeat(64), findingCodes: [] }) },
+    localPrivacyScanner: { scan: () => ({ status: "passed", coverage: "private_denylist", scannerVersion: "synthetic-scanner", denylistDigest: "d".repeat(64), findingCodes: [] }) },
   });
   const initial = await workbench.read();
   assert.equal(initial.candidates.length, 7);

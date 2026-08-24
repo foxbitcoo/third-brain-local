@@ -99,6 +99,7 @@ function createPreview(
   const scannedDigest = canonicalDigest("third-brain/report-private-scan-input/v1", envelope);
   let privateScan = {
     status: "required",
+    coverage: "unavailable",
     scannerVersion: "host_scanner_unavailable",
     denylistDigest: "0".repeat(64),
     findingCodes: ["private_scan_required"],
@@ -111,6 +112,7 @@ function createPreview(
     } catch {
       privateScan = {
         status: "blocked",
+        coverage: "unavailable",
         scannerVersion: "host_scanner_invalid",
         denylistDigest: "0".repeat(64),
         findingCodes: ["private_scanner_failed_closed"],
@@ -118,7 +120,8 @@ function createPreview(
       };
     }
   }
-  const privateScanPassed = privateScan.status === "passed";
+  const privateScanPassed = privateScan.status === "passed"
+    && privateScan.coverage === "private_denylist";
   let findings = immutableCopy(scan.findings);
   if (!privateScanPassed) {
     const redacted = redactedBlockedPreview(
@@ -351,7 +354,10 @@ export function createReportToIssueService(options) {
       const { draftId } = snapshot;
       const record = options.store.load(draftId);
       if (record === null) throw new ReportToIssueError("draft_not_found", "report draft was not found");
-      if (record.current.privacy.status !== "passed") {
+      if (
+        record.current.privacy.status !== "passed" ||
+        record.current.privacy.privateScan?.coverage !== "private_denylist"
+      ) {
         const code = record.current.privacy.status === "pending_private_scan"
           ? "private_scan_required"
           : "privacy_blocked";

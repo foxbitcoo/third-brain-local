@@ -18,6 +18,7 @@ const REQUIRED_FILES = Object.freeze([
   "src/wps-message-client.mjs",
   "src/openai-compatible.mjs",
   "src/public-workbench.mjs",
+  "src/public-workbench-manifest.mjs",
   "scripts/setup-local.mjs",
   "scripts/start-local.mjs",
   "scripts/check-public-git.mjs",

@@ -206,7 +206,9 @@ function assertAttachments(attachments) {
 function assertDraftSnapshot(snapshot) {
   exactKeys(
     snapshot,
-    ["edition", "report", "source", "attachments", "classification"],
+    snapshot.classification === undefined
+      ? ["edition", "report", "source", "attachments"]
+      : ["edition", "report", "source", "attachments", "classification"],
     "draft",
   );
   if (snapshot.edition !== "public") {
@@ -215,13 +217,15 @@ function assertDraftSnapshot(snapshot) {
   assertReport(snapshot.report);
   assertSource(snapshot.source);
   assertAttachments(snapshot.attachments);
-  exactKeys(
-    snapshot.classification,
-    ["containsOfficeText", "containsInternalInformation", "isSecurityOrPrivacyIssue"],
-    "classification",
-  );
-  for (const value of Object.values(snapshot.classification)) {
-    if (typeof value !== "boolean") invalid("classification values must be boolean");
+  if (snapshot.classification !== undefined) {
+    exactKeys(
+      snapshot.classification,
+      ["containsOfficeText", "containsInternalInformation", "isSecurityOrPrivacyIssue"],
+      "classification",
+    );
+    for (const value of Object.values(snapshot.classification)) {
+      if (typeof value !== "boolean") invalid("classification values must be boolean");
+    }
   }
   return snapshot;
 }
@@ -334,12 +338,15 @@ export function assertReceiptActionInput(input) {
 export function assertPrivateScanResponse(input) {
   const snapshot = snapshotAction(
     input,
-    ["status", "scannerVersion", "denylistDigest", "findingCodes"],
+    ["status", "coverage", "scannerVersion", "denylistDigest", "findingCodes"],
     "invalid_private_scan_response",
     "private scanner returned an invalid bounded receipt",
   );
   try {
     if (!["passed", "blocked"].includes(snapshot.status)) invalid("scan status is invalid");
+    if (!["private_denylist", "generic_patterns_only"].includes(snapshot.coverage)) {
+      invalid("scan coverage is invalid");
+    }
     text(snapshot.scannerVersion, "privateScan.scannerVersion", { max: 100 });
     if (!SHA256.test(snapshot.denylistDigest)) invalid("denylist digest is invalid");
     if (!Array.isArray(snapshot.findingCodes) || snapshot.findingCodes.length > 50) {
@@ -352,6 +359,9 @@ export function assertPrivateScanResponse(input) {
     }
     if (snapshot.status === "passed" && snapshot.findingCodes.length !== 0) {
       invalid("a passed private scan cannot contain findings");
+    }
+    if (snapshot.status === "passed" && snapshot.coverage !== "private_denylist") {
+      invalid("a passed private scan must cover the private denylist");
     }
   } catch (error) {
     if (error instanceof ReportToIssueError) {

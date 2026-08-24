@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
 import { createPublicCandidateWorkbench } from "../src/public-workbench.mjs";
 import { createInMemoryReportStore, createReportToIssueService } from "../src/report-to-issue/index.mjs";
 
@@ -18,6 +19,7 @@ function passingScanner(calls = []) {
       calls.push(envelope);
       return {
         status: "passed",
+        coverage: "private_denylist",
         scannerVersion: "synthetic-public-denylist/v1",
         denylistDigest: "f".repeat(64),
         findingCodes: [],
@@ -25,6 +27,35 @@ function passingScanner(calls = []) {
     },
   };
 }
+
+test("unclassified free-form report text fails closed without a private denylist scanner", async () => {
+  const workbench = createPublicCandidateWorkbench({
+    store: memoryStore(),
+    localPrivacyScanner: createLocalReportPrivacyScanner(),
+  });
+  const unclassifiedMarker = "UNCLASSIFIED_SYNTHETIC_REPORT_TEXT";
+
+  const created = await workbench.draftReport({
+    candidateId: "synthetic-candidate-01",
+    title: unclassifiedMarker,
+    body: unclassifiedMarker,
+  });
+
+  assert.equal(created.draft.privacy.status, "blocked");
+  assert.equal(JSON.stringify(created).includes(unclassifiedMarker), false);
+  assert.equal(
+    created.draft.privacy.privateScan.findingCodes.includes("private_denylist_unavailable"),
+    true,
+  );
+  await assert.rejects(
+    workbench.confirmReport({
+      draftId: created.draft.id,
+      previewDigest: created.draft.previewDigest,
+      acknowledgement: "CONFIRM_LOCAL_DRAFT",
+    }),
+    (error) => error.code === "privacy_blocked",
+  );
+});
 
 test("public report facade fixes target/source and keeps local lifecycle receipts immutable", async () => {
   const calls = [];
@@ -43,6 +74,8 @@ test("public report facade fixes target/source and keeps local lifecycle receipt
   assert.equal(created.draft.target.repository, "foxbitcoo/third-brain-local");
   assert.equal(created.draft.source.branch, "public-local-workbench");
   assert.equal(created.draft.source.files[0].path, "public/synthetic-candidates/synthetic-candidate-01.json");
+  assert.equal(created.draft.source.commit, "35e02f1881c657266b1adc000577d7b54fac00c73df864847ffef3725ed396b4");
+  assert.equal(created.draft.source.files[0].contentDigest, "1c53f851fb663df1915114d5bd936226da44d8288a19fd0eaa6011522a879a23");
   assert.equal(created.draft.privacy.status, "passed");
   assert.equal(Object.isFrozen(calls[0]), true);
   assert.equal(calls[0].target.repository, "foxbitcoo/third-brain-local");
@@ -101,6 +134,36 @@ test("invalid or contradictory scanner receipts fail closed without preserving r
   });
   assert.equal(created.draft.privacy.status, "blocked");
   assert.equal(JSON.stringify(created).includes(privateMarker), false);
+  await assert.rejects(
+    workbench.confirmReport({
+      draftId: created.draft.id,
+      previewDigest: created.draft.previewDigest,
+      acknowledgement: "CONFIRM_LOCAL_DRAFT",
+    }),
+    (error) => error.code === "privacy_blocked",
+  );
+});
+
+test("legacy generic-only scan receipts cannot confirm a persisted report", async () => {
+  const values = new Map();
+  const store = {
+    async read(key) { return values.has(key) ? structuredClone(values.get(key)) : undefined; },
+    async write(key, value) { values.set(key, structuredClone(value)); },
+  };
+  const workbench = createPublicCandidateWorkbench({
+    store,
+    localPrivacyScanner: passingScanner(),
+  });
+  const created = await workbench.draftReport({
+    candidateId: "synthetic-candidate-03",
+    title: "Synthetic local preview",
+    body: "Neutral synthetic report content.",
+  });
+  const persisted = values.get("public-workbench");
+  delete persisted.reportRecords[0].current.privacy.privateScan.coverage;
+  persisted.reportRecords[0].current.privacy.privateScan.scannerVersion = "generic-local-rules-v1";
+  values.set("public-workbench", persisted);
+
   await assert.rejects(
     workbench.confirmReport({
       draftId: created.draft.id,

@@ -11,11 +11,15 @@ export function createLocalReportPrivacyScanner() {
   return Object.freeze({
     scan(envelope) {
       const content = JSON.stringify(envelope);
-      const findingCodes = RULES.filter(([, rule]) => rule.test(content)).map(([code]) => code);
+      const findingCodes = [
+        ...RULES.filter(([, rule]) => rule.test(content)).map(([code]) => code),
+        "private_denylist_unavailable",
+      ];
       return {
-        status: findingCodes.length ? "blocked" : "passed",
-        scannerVersion: "generic-local-rules-v1",
-        denylistDigest: createHash("sha256").update("generic-local-rules-v1").digest("hex"),
+        status: "blocked",
+        coverage: "generic_patterns_only",
+        scannerVersion: "generic-local-rules-v2",
+        denylistDigest: createHash("sha256").update("private-denylist-unavailable").digest("hex"),
         findingCodes,
       };
     },

@@ -3,6 +3,7 @@ import {
   createReportToIssueService,
   ReportToIssueError,
 } from "./report-to-issue/index.mjs";
+import { PUBLIC_CANDIDATE_MANIFEST } from "./public-workbench-manifest.mjs";
 const ref = (index) => Object.freeze({ id: `synthetic-evidence-0${index}`, revision: "synthetic-r1", fingerprint: `${index}`.repeat(64) });
 const DETAILS = Object.freeze([
   ["范围变化", "范围被明确增加或缩减，且仍需决定是否保留。", "是否保留为后续候选？", "synthetic_source_alpha", "synthetic_participant_alpha", "决策变化"],
@@ -24,14 +25,15 @@ const FROZEN_EVENT_TYPES = new Set(["决策变化", "责任归属变化", "下�
 function nonEmpty(value, label) { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} 必须明确填写`); return value.trim(); }
 function isoTime(value) { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new Error("发生时间必须是 ISO UTC 时间"); return value; }
 function publicSource(candidate) {
-  const fingerprint = canonicalDigest("third-brain/public-synthetic-candidate/v1", candidate);
+  const frozen = PUBLIC_CANDIDATE_MANIFEST.candidates.find((item) => item.id === candidate.id);
+  if (frozen === undefined) throw new Error("合成候选不在冻结 manifest 中");
   return {
     branch: "public-local-workbench",
-    commit: canonicalDigest("third-brain/public-workbench-source/v1", { candidateId: candidate.id }),
+    commit: PUBLIC_CANDIDATE_MANIFEST.manifestDigest,
     files: [{
       path: `public/synthetic-candidates/${candidate.id}.json`,
-      contentDigest: fingerprint,
-      diffDigest: canonicalDigest("third-brain/public-workbench-diff/v1", { candidateId: candidate.id }),
+      contentDigest: frozen.candidateDigest,
+      diffDigest: frozen.sourceDiffDigest,
     }],
   };
 }
@@ -54,11 +56,6 @@ function publicReportInput(candidate, title, body) {
     },
     source: publicSource(candidate),
     attachments: [],
-    classification: {
-      containsOfficeText: false,
-      containsInternalInformation: false,
-      isSecurityOrPrivacyIssue: false,
-    },
   };
 }
 
@@ -78,9 +75,84 @@ function reportRecordStore(records) {
 function publicDraftView(draft) {
   return { ...draft, id: draft.draftId };
 }
+
+function exactFields(value, fields) {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).length === fields.length
+    && Object.keys(value).every((field) => fields.includes(field));
+}
+
+function evidenceSet(candidate) {
+  return {
+    minimumEvidence: candidate.minimumEvidence,
+    items: [candidate.evidence],
+    conflictingClaims: candidate.conflictingClaims ?? [],
+  };
+}
+
+const { manifestDigest: expectedManifestDigest, ...manifestBody } = PUBLIC_CANDIDATE_MANIFEST;
+const manifestIntegrityValid = expectedManifestDigest === canonicalDigest(
+  "third-brain/public-synthetic-candidate-manifest/v1",
+  manifestBody,
+);
+
 export function validateCandidateSet(candidates = SYNTHETIC_CANDIDATES) {
-  if (!Array.isArray(candidates) || candidates.length !== 7 || new Set(candidates.map((item) => item?.id)).size !== 7) return { accepted: false, reason: "candidate_set_not_exactly_7" };
-  for (const [index, item] of candidates.entries()) { const expected = SYNTHETIC_CANDIDATES[index]; const actual = item?.evidence; if (!item || item.id !== expected.id || item.eventType !== expected.eventType) return { accepted: false, reason: "candidate_identity_or_type_mismatch" }; if (!actual || actual.id !== expected.evidence.id || actual.revision !== expected.evidence.revision || actual.fingerprint !== expected.evidence.fingerprint || !/^[a-f0-9]{64}$/u.test(actual.fingerprint)) return { accepted: false, reason: "candidate_evidence_mismatch" }; }
+  if (!manifestIntegrityValid) return { accepted: false, reason: "candidate_manifest_invalid" };
+  const frozenCandidates = PUBLIC_CANDIDATE_MANIFEST.candidates;
+  if (
+    !Array.isArray(candidates) ||
+    candidates.length !== frozenCandidates.length ||
+    new Set(candidates.map((item) => item?.id)).size !== frozenCandidates.length
+  ) {
+    return { accepted: false, reason: "candidate_set_not_exactly_7" };
+  }
+  const actualSetEntries = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const frozen = frozenCandidates[index];
+    if (candidate?.id !== frozen.id) {
+      return { accepted: false, reason: "candidate_order_or_identity_mismatch" };
+    }
+    const candidateFields = frozen.hasConflictingClaims
+      ? [...PUBLIC_CANDIDATE_MANIFEST.candidateFields, "conflictingClaims"]
+      : PUBLIC_CANDIDATE_MANIFEST.candidateFields;
+    if (!exactFields(candidate, candidateFields)) {
+      return { accepted: false, reason: "candidate_business_fields_mismatch" };
+    }
+    if (!exactFields(candidate.evidence, PUBLIC_CANDIDATE_MANIFEST.evidenceFields)) {
+      return { accepted: false, reason: "candidate_evidence_mismatch" };
+    }
+    if (
+      frozen.hasConflictingClaims &&
+      (!Array.isArray(candidate.conflictingClaims) ||
+        candidate.conflictingClaims.some((claim) =>
+          !exactFields(claim, PUBLIC_CANDIDATE_MANIFEST.conflictClaimFields)))
+    ) {
+      return { accepted: false, reason: "candidate_evidence_mismatch" };
+    }
+    const candidateDigest = canonicalDigest(
+      "third-brain/public-synthetic-candidate/v2",
+      candidate,
+    );
+    const evidenceSetDigest = canonicalDigest(
+      "third-brain/public-synthetic-evidence-set/v1",
+      evidenceSet(candidate),
+    );
+    if (
+      candidateDigest !== frozen.candidateDigest ||
+      evidenceSetDigest !== frozen.evidenceSetDigest
+    ) {
+      return { accepted: false, reason: "candidate_manifest_digest_mismatch" };
+    }
+    actualSetEntries.push({ id: candidate.id, candidateDigest, evidenceSetDigest });
+  }
+  if (
+    canonicalDigest("third-brain/public-synthetic-candidate-set/v2", actualSetEntries) !==
+    PUBLIC_CANDIDATE_MANIFEST.setDigest
+  ) {
+    return { accepted: false, reason: "candidate_set_digest_mismatch" };
+  }
   return { accepted: true, reason: "synthetic_7_of_7" };
 }
 export function createPublicCandidateWorkbench({ store, now = () => new Date(), localPrivacyScanner } = {}) {
