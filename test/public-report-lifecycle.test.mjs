@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 
 import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
@@ -185,4 +187,33 @@ test("public report core has no GitHub submission boundary", () => {
     }),
     /does not accept a GitHub submit port/u,
   );
+});
+
+test("public workbench keeps source import on the sources route and renders only neutral relationship language", async () => {
+  const [page, script] = await Promise.all([
+    readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
+    readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
+  ]);
+
+  assert.match(script, /sources: \["sources", "sourceImport"\]/u);
+  assert.match(page, /id="sourceImport"/u);
+  assert.match(page, /\.workspace-overview\[hidden\]\{display:none\}/u);
+  assert.doesNotMatch(page, /关系 · 原始候选分析/u);
+  assert.match(page, /关系 · 中性合成视图/u);
+  assert.doesNotMatch(page, /(?:真实姓名|部门|汇报线)/u);
+});
+
+test("public workbench UI provides local report history, correction, revocation, and refresh readback", async () => {
+  const page = (await readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"))
+    + (await readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"));
+
+  for (const capability of ["refreshReport", "readReportHistory", "correctReport", "revokeReportConfirmation"]) {
+    assert.match(page, new RegExp("window\\." + capability + "=async", "u"));
+  }
+  assert.match(page, /reports\/correct/u);
+  assert.match(page, /reports\/revoke/u);
+  assert.match(page, /report-history/u);
+  assert.match(page, /外部提交：NOT_IMPLEMENTED/u);
+  assert.match(page, /confirmation\.draftRevision === history\.history\.currentRevision/u);
+  assert.match(page, /revokedReceiptIds\.has\(confirmation\.receiptId\)/u);
 });

@@ -307,7 +307,10 @@ test("首次设置不默认绑定任何模型服务商、地址或模型名称",
 });
 
 test("公开工作台提供响应式决策、来源、关系和设置拓扑", async () => {
-  const page = await readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8");
+  const [page, ui] = await Promise.all([
+    readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
+    readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
+  ]);
   for (const target of ["#home", "#decisions", "#sources", "#relationships", "#settings"]) assert.match(page, new RegExp(target));
   for (const sectionId of ["id=\"decisions\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\""]) assert.match(page, new RegExp(sectionId));
   assert.match(page, /workspace-header/u);
@@ -316,7 +319,7 @@ test("公开工作台提供响应式决策、来源、关系和设置拓扑", as
   assert.match(page, /width:288px/u);
   assert.match(page, /navToggle/u);
   assert.match(page, /history\.back\(\)/u);
-  assert.match(page, /c\.conflictingClaims\?/u);
+  assert.match(ui, /candidate\.conflictingClaims/u);
 });
 
 test("工作台导航位于粘性页头之上，且页头背景不拦截路由点击", async () => {

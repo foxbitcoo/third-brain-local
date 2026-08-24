@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 function json(response, status, value) {
   response.writeHead(status, {
@@ -39,12 +40,13 @@ function assertLoopbackHost(request) {
 }
 
 export function createLocalHttpServer({ runtime, indexFile }) {
+  const indexPath = typeof indexFile === "string" ? indexFile : fileURLToPath(indexFile);
   return createServer(async (request, response) => {
     try {
       assertLoopbackHost(request);
       const url = new URL(request.url, "http://127.0.0.1");
       if (request.method === "GET" && url.pathname === "/") {
-        const html = await readFile(indexFile, "utf8");
+        const html = await readFile(indexPath, "utf8");
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
@@ -52,6 +54,16 @@ export function createLocalHttpServer({ runtime, indexFile }) {
           "x-frame-options": "DENY",
         });
         response.end(html);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/workbench-ui.js") {
+        const script = await readFile(indexPath.replace(/index\.html$/u, "workbench-ui.js"), "utf8");
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(script);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/status") return json(response, 200, await runtime.status());
@@ -91,6 +103,9 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/confirm") {
         assertSameOriginJson(request);
         return json(response, 200, await runtime.confirmPublicIssue(await body(request)));
+      }
+      if (request.method === "GET" && url.pathname === "/api/public-workbench/reports/latest") {
+        return json(response, 200, await runtime.readLatestPublicIssue({ candidateId: url.searchParams.get("candidateId") }));
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/public-workbench/reports/")) {
         const draftId = url.pathname.slice("/api/public-workbench/reports/".length);
