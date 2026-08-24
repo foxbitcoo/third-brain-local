@@ -65,6 +65,11 @@ test("公开版冻结 Report to Issue 的本地隐私门禁，但不把未接通
     assert.match(content, /完整预览/u);
     assert.match(content, /本地草稿/u);
     assert.match(content, /(?:没有|尚未).*?(?:GitHub|外部)/su);
+    assert.match(content, /manual_review_required/u);
+    assert.match(content, /私人标识未完全自动验证/u);
+    assert.match(content, /完整预览.*独立明确承认.*本地草稿/su);
+    assert.match(content, /(?:有 finding|发现风险).*阻断/su);
+    assert.match(content, /passed.*VERIFIED/su);
   }
 
   assert.match(releaseSource, /个人版.*公开版.*Report to Issue/su);
@@ -417,12 +422,12 @@ test("冻结 manifest 拒绝最小证据、证据集合与冲突证据篡改", (
   })).accepted, false);
 });
 
-test("公开安装缺少私人 denylist 时本地报告扫描器明确失败关闭", () => {
+test("公开安装缺少私人 denylist 时 clean 报告进入人工复核而通用 finding 继续阻断", () => {
   const scanner = createLocalReportPrivacyScanner();
   const clean = scanner.scan({ issue: { title: "中性本地草稿", body: "只用于完整预览。" } });
-  assert.equal(clean.status, "blocked");
+  assert.equal(clean.status, "manual_review_required");
   assert.equal(clean.coverage, "generic_patterns_only");
-  assert.equal(clean.findingCodes.includes("private_denylist_unavailable"), true);
+  assert.deepEqual(clean.findingCodes, []);
   assert.match(clean.denylistDigest, /^[a-f0-9]{64}$/u);
   const blocked = scanner.scan({ issue: { title: "本地草稿", body: "api_key=sample-placeholder" } });
   assert.equal(blocked.status, "blocked");

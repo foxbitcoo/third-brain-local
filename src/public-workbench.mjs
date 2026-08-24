@@ -157,6 +157,7 @@ export function validateCandidateSet(candidates = SYNTHETIC_CANDIDATES) {
 }
 export function createPublicCandidateWorkbench({ store, now = () => new Date(), localPrivacyScanner } = {}) {
   if (!store) throw new TypeError("local store is required");
+  const pendingManualReports = new Map();
   const readState = async () => {
     const state = (await store.read("public-workbench")) || {};
     return {
@@ -189,6 +190,13 @@ export function createPublicCandidateWorkbench({ store, now = () => new Date(), 
       const state = await readState();
       const { core, records } = reportService(state);
       const draft = core.createDraft(publicReportInput(candidate, nonEmpty(title, "报告标题"), nonEmpty(body, "报告正文")));
+      if (draft.privacy.status === "manual_review_required") {
+        pendingManualReports.set(draft.draftId, {
+          candidateId,
+          record: records.load(draft.draftId),
+        });
+        return { draft: publicDraftView(draft), preview: draft.issue, submission: "NOT_IMPLEMENTED" };
+      }
       state.reportLinks.push({ draftId: draft.draftId, candidateId });
       await saveReports(state, records);
       return { draft: publicDraftView(draft), preview: draft.issue, submission: "NOT_IMPLEMENTED" };
@@ -206,11 +214,29 @@ export function createPublicCandidateWorkbench({ store, now = () => new Date(), 
       const { core } = reportService(state);
       return { draft: publicDraftView(core.readDraft(link.draftId)), submission: "NOT_IMPLEMENTED" };
     },
-    async confirmReport({ draftId, previewDigest, acknowledgement, githubLogin = "local-preview-user" }) {
+    async confirmReport({ draftId, previewDigest, acknowledgement, privacyAcknowledgement, githubLogin = "local-preview-user" }) {
       if (acknowledgement !== "CONFIRM_LOCAL_DRAFT") throw new Error("必须明确确认已完整检查本地报告");
       const state = await readState();
-      const { core, records } = reportService(state);
-      const receipt = core.confirmDraft({ draftId, previewDigest, githubIdentity: { login: githubLogin } });
+      const pending = pendingManualReports.get(draftId);
+      const records = reportRecordStore([
+        ...state.reportRecords,
+        ...(pending ? [pending.record] : []),
+      ]);
+      const core = createReportToIssueService({
+        store: records,
+        localPrivacyScanner,
+        now: () => now().toISOString(),
+      });
+      const receipt = core.confirmDraft({
+        draftId,
+        previewDigest,
+        githubIdentity: { login: githubLogin },
+        ...(privacyAcknowledgement === undefined ? {} : { privacyAcknowledgement }),
+      });
+      if (pending) {
+        state.reportLinks.push({ draftId, candidateId: pending.candidateId });
+        pendingManualReports.delete(draftId);
+      }
       await saveReports(state, records);
       return { confirmed: true, receipt, submission: "NOT_IMPLEMENTED" };
     },

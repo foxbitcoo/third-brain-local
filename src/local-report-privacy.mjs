@@ -11,12 +11,9 @@ export function createLocalReportPrivacyScanner() {
   return Object.freeze({
     scan(envelope) {
       const content = JSON.stringify(envelope);
-      const findingCodes = [
-        ...RULES.filter(([, rule]) => rule.test(content)).map(([code]) => code),
-        "private_denylist_unavailable",
-      ];
+      const findingCodes = RULES.filter(([, rule]) => rule.test(content)).map(([code]) => code);
       return {
-        status: "blocked",
+        status: findingCodes.length === 0 ? "manual_review_required" : "blocked",
         coverage: "generic_patterns_only",
         scannerVersion: "generic-local-rules-v2",
         denylistDigest: createHash("sha256").update("private-denylist-unavailable").digest("hex"),

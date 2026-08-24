@@ -18,10 +18,17 @@ const post = (url, body) => request(url, {
 
 const routePanels = {
   home: ["home"],
-  decisions: ["decisions"],
+  decisions: ["analysisPanel", "decisions"],
   sources: ["sources", "sourceImport"],
   relationships: ["relationships"],
   settings: ["settings"],
+};
+
+const decisionLabels = {
+  important: "重要",
+  related: "相关但非重点",
+  noise: "噪声",
+  uncertain: "不确定",
 };
 
 for (const [route, ids] of Object.entries(routePanels)) {
@@ -61,7 +68,14 @@ function draftControls(candidateId, draft, history) {
   const revoke = receipt
     ? "<button class=\"secondary\" onclick=\"revokeReportConfirmation('" + candidateId + "','" + receipt.receiptId + "')\">撤销本地确认</button>"
     : "";
-  return "<p>本地草稿 · r" + escapeHtml(draft.revision) + " · 外部提交：NOT_IMPLEMENTED</p>"
+  const privacyNotice = draft.privacy.status === "manual_review_required"
+    ? "<p class=\"error\">人工复核记录：私人标识未完全自动验证；本地确认不代表隐私验证通过。</p>"
+    : draft.privacy.status === "blocked"
+      ? "<p class=\"error\">隐私门禁阻断。</p>"
+      : draft.privacy.status === "passed"
+        ? "<p>私人 denylist 严格扫描已通过。</p>"
+        : "<p class=\"error\">私人扫描尚未完成。</p>";
+  return "<p>本地草稿 · r" + escapeHtml(draft.revision) + " · 外部提交：NOT_IMPLEMENTED</p>" + privacyNotice
     + "<b>" + escapeHtml(draft.issue.title) + "</b><p>" + escapeHtml(draft.issue.body) + "</p>"
     + "<p class=\"workbench-note\">" + lifecycle + "</p><p>"
     + "<button class=\"secondary\" onclick=\"readReportHistory('" + candidateId + "','" + draft.id + "')\">查看历史</button> "
@@ -132,24 +146,40 @@ window.draftReport=async (candidateId) => {
       title: byId("report-title-" + candidateId).value,
       body: byId("report-body-" + candidateId).value,
     });
-    if (result.draft.privacy.status !== "passed") {
+    if (result.draft.privacy.status === "blocked") {
       reportOutput(candidateId, "<p class=\"error\">隐私门禁未通过；原始内容未被保存或返回。</p>");
+      return;
+    }
+    if (result.draft.privacy.status === "manual_review_required") {
+      reportOutput(candidateId, "<p class=\"error\">需要人工复核：通用规则未发现风险，但私人标识未完全自动验证。</p>"
+        + "<p>请逐字检查以下完整预览；这不是隐私验证通过，也不会外部提交。</p><b>"
+        + escapeHtml(result.preview.title) + "</b><p>" + escapeHtml(result.preview.body) + "</p>"
+        + "<label><input type=\"checkbox\" id=\"manual-review-ack-" + candidateId
+        + "\"> 我确认已完整预览，并承认私人标识未完全自动验证。</label><p><button onclick=\"confirmReport('"
+        + candidateId + "','" + result.draft.id + "','" + result.draft.previewDigest
+        + "',true)\">仅保存本地草稿</button></p>");
       return;
     }
     reportOutput(candidateId, "<p>隐私门禁通过。完整预览：</p><b>" + escapeHtml(result.preview.title)
       + "</b><p>" + escapeHtml(result.preview.body) + "</p><button onclick=\"confirmReport('" + candidateId
-      + "','" + result.draft.id + "','" + result.draft.previewDigest + "')\">我已完整检查，仅确认本地草稿</button>");
+      + "','" + result.draft.id + "','" + result.draft.previewDigest + "',false)\">我已完整检查，仅确认本地草稿</button>");
   } catch (error) {
     reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
   }
 };
 
-window.confirmReport=async (candidateId, draftId, previewDigest) => {
+window.confirmReport=async (candidateId, draftId, previewDigest, manualReview) => {
   try {
+    if (manualReview && !byId("manual-review-ack-" + candidateId).checked) {
+      throw new Error("请先明确承认私人标识未完全自动验证");
+    }
     await post("/api/public-workbench/reports/confirm", {
       draftId,
       previewDigest,
       acknowledgement: "CONFIRM_LOCAL_DRAFT",
+      ...(manualReview ? {
+        privacyAcknowledgement: "ACKNOWLEDGE_PRIVATE_IDENTIFIERS_NOT_FULLY_VERIFIED",
+      } : {}),
     });
     await window.refreshReport(candidateId);
   } catch (error) {
@@ -202,6 +232,7 @@ async function refreshStatus() {
     + (status.wpsAuthorized ? "ok" : "") + "\">WPS" + (status.wpsAuthorized ? "已授权" : "未授权")
     + "</span><span class=\"pill " + (status.importedMessages && status.importComplete ? "ok" : "") + "\">"
     + (status.importedMessages || 0) + " 条本地消息" + (status.importedMessages && !status.importComplete ? "（不完整）" : "") + "</span>";
+  byId("analyze").disabled = !status.importedMessages || !status.importComplete;
 }
 
 byId("navToggle").onclick = () => {
@@ -227,7 +258,13 @@ byId("load").onclick = async () => {
   try {
     const result = await request("/api/chats");
     const chats = result.chats || [];
-    byId("chats").innerHTML = chats.map((chat) => "<label class=\"chat\"><input type=\"checkbox\" value=\""
+    const completeness = result.completeness?.complete
+      ? ""
+      : "<p class=\"error\">会话清单未完整：" + escapeHtml(result.completeness?.reason) + "</p>";
+    const hiddenPrivateChats = result.hiddenPrivateChats
+      ? "<p>首轮已隐藏 " + escapeHtml(result.hiddenPrivateChats) + " 个私聊；私聊不会被导入。</p>"
+      : "";
+    byId("chats").innerHTML = completeness + hiddenPrivateChats + chats.map((chat) => "<label class=\"chat\"><input type=\"checkbox\" value=\""
       + escapeHtml(chat.id) + "\"><span><b>" + escapeHtml(chat.name) + "</b><br><small>"
       + escapeHtml(chat.type) + "</small></span></label>").join("") || "<p>没有读取到群聊。</p>";
     byId("import").disabled = !chats.length;
@@ -239,10 +276,45 @@ byId("import").onclick = async () => {
   const chatIds = [...document.querySelectorAll("#chats input:checked")].map((item) => item.value);
   try {
     const result = await post("/api/import", { chatIds, days: Number(byId("days").value) });
-    byId("importResult").textContent = "已加密保存 " + result.messageCount + " 条本地消息。";
+    const range = result.range
+      ? escapeHtml(result.range.startAt.slice(0, 10)) + " 至 " + escapeHtml(result.range.endAt.slice(0, 10))
+      : "本次选择范围";
+    const completeness = result.complete ? "（完整）" : "（存在截断，已禁止分析）";
+    const sources = (result.sources || []).map((source) => "<small>" + escapeHtml(source.chatName) + "："
+      + escapeHtml(source.messageCount) + " 条 · " + (source.completeness.complete
+        ? "完整"
+        : "截断（" + escapeHtml(source.completeness.reason) + "）") + "</small><br>").join("");
+    const retry = result.complete ? "" : "<p class=\"error\">请缩短时间范围或减少群聊后重新导入。</p>";
+    byId("importResult").innerHTML = "<p>已加密保存 " + escapeHtml(result.messageCount) + " 条，"
+      + range + completeness + "</p>" + sources + retry;
     await refreshStatus();
   } catch (error) {
     byId("importResult").textContent = error.message;
+  }
+};
+
+window.saveDecision=async (candidateIndex, decision) => {
+  await post("/api/judgments", { candidateIndex, decision });
+  document.querySelector('[data-decision-for="' + candidateIndex + '"]').textContent = "已记录：" + decisionLabels[decision];
+};
+
+byId("analyze").onclick = async () => {
+  const output = byId("analysis");
+  try {
+    output.hidden = false;
+    output.textContent = "分析中…";
+    const result = await post("/api/analyze", {});
+    output.innerHTML = "<b>" + escapeHtml(result.summary) + "</b>" + (result.candidates || []).map((candidate, index) =>
+      "<div class=\"candidate\"><b>" + escapeHtml(candidate.title || "候选") + "</b><p>"
+      + escapeHtml(candidate.reason || "") + "</p><small>" + escapeHtml(candidate.nextQuestion || "") + "</small><div>"
+      + ((candidate.evidence || []).map((evidence) => "<p><b>" + escapeHtml(evidence.chatName) + "</b> · "
+        + escapeHtml(evidence.occurredAt) + "<br>“" + escapeHtml(evidence.excerpt) + "”</p>").join("")
+        || "<p class=\"error\">该候选没有可回查依据，请优先判为不确定。</p>")
+      + "</div><p>" + Object.entries(decisionLabels).map(([key, label]) =>
+        "<button class=\"secondary\" onclick=\"saveDecision(" + index + ",'" + key + "')\">" + label + "</button>").join(" ")
+      + " <span data-decision-for=\"" + index + "\"></span></p></div>").join("");
+  } catch (error) {
+    output.textContent = error.message;
   }
 };
 

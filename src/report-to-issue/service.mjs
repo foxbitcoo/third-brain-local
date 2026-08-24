@@ -122,8 +122,11 @@ function createPreview(
   }
   const privateScanPassed = privateScan.status === "passed"
     && privateScan.coverage === "private_denylist";
+  const privateScanNeedsManualReview = privateScan.status === "manual_review_required"
+    && privateScan.coverage === "generic_patterns_only"
+    && privateScan.findingCodes.length === 0;
   let findings = immutableCopy(scan.findings);
-  if (!privateScanPassed) {
+  if (scan.status === "blocked" || (!privateScanPassed && !privateScanNeedsManualReview)) {
     const redacted = redactedBlockedPreview(
       scan,
       input,
@@ -140,7 +143,9 @@ function createPreview(
       ? "pending_private_scan"
       : privateScanPassed
         ? "passed"
-        : "blocked";
+        : privateScanNeedsManualReview
+          ? "manual_review_required"
+          : "blocked";
   const preview = {
     schemaVersion: "report-to-issue-draft/v1",
     draftId,
@@ -227,6 +232,9 @@ function createConfirmationReceipt(record, input, { confirmedAt, receiptId }) {
       bodyDigest: canonicalDigest("third-brain/report-issue-body/v1", draft.issue.body),
     },
     privacyScanDigest: draft.privacy.scanDigest,
+    ...(draft.privacy.status === "manual_review_required"
+      ? { privacyAcknowledgement: input.privacyAcknowledgement }
+      : {}),
     previewDigest: draft.previewDigest,
   };
   return immutableCopy({
@@ -266,6 +274,9 @@ function assertReceiptMatchesCurrent(record, receipt) {
     {
       previewDigest: record.current.previewDigest,
       githubIdentity: { login: snapshot.actor.login },
+      ...(Object.hasOwn(snapshot, "privacyAcknowledgement")
+        ? { privacyAcknowledgement: snapshot.privacyAcknowledgement }
+        : {}),
     },
     { confirmedAt: snapshot.confirmedAt, receiptId: snapshot.receiptId },
   );
@@ -354,16 +365,27 @@ export function createReportToIssueService(options) {
       const { draftId } = snapshot;
       const record = options.store.load(draftId);
       if (record === null) throw new ReportToIssueError("draft_not_found", "report draft was not found");
-      if (
-        record.current.privacy.status !== "passed" ||
-        record.current.privacy.privateScan?.coverage !== "private_denylist"
-      ) {
+      const strictPrivacyPassed = record.current.privacy.status === "passed"
+        && record.current.privacy.privateScan?.coverage === "private_denylist";
+      const manualReviewAllowed = record.current.privacy.status === "manual_review_required"
+        && record.current.privacy.privateScan?.coverage === "generic_patterns_only"
+        && record.current.privacy.privateScan?.findingCodes?.length === 0;
+      if (!strictPrivacyPassed && !manualReviewAllowed) {
         const code = record.current.privacy.status === "pending_private_scan"
           ? "private_scan_required"
           : "privacy_blocked";
         throw new ReportToIssueError(
           code,
           "报告未通过本地隐私门禁，不能确认",
+        );
+      }
+      if (
+        manualReviewAllowed &&
+        snapshot.privacyAcknowledgement !== "ACKNOWLEDGE_PRIVATE_IDENTIFIERS_NOT_FULLY_VERIFIED"
+      ) {
+        throw new ReportToIssueError(
+          "manual_review_acknowledgement_required",
+          "必须明确承认私人标识未完全自动验证后，才能保存本地草稿",
         );
       }
       assertGithubIdentity(snapshot.githubIdentity);

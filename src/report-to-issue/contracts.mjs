@@ -237,9 +237,13 @@ export function assertDraftInput(input) {
 export function assertConfirmationInput(input) {
   try {
     const snapshot = snapshotPlainData(input);
+    const confirmationKeys = ["draftId", "previewDigest", "githubIdentity"];
+    if (Object.hasOwn(snapshot, "privacyAcknowledgement")) {
+      confirmationKeys.push("privacyAcknowledgement");
+    }
     exactKeys(
       snapshot,
-      ["draftId", "previewDigest", "githubIdentity"],
+      confirmationKeys,
       "confirmation",
     );
     text(snapshot.draftId, "confirmation.draftId", { max: 200 });
@@ -248,12 +252,15 @@ export function assertConfirmationInput(input) {
     }
     exactKeys(snapshot.githubIdentity, ["login"], "confirmation.githubIdentity");
     text(snapshot.githubIdentity.login, "confirmation.githubIdentity.login", { max: 39 });
+    if (Object.hasOwn(snapshot, "privacyAcknowledgement")) {
+      text(snapshot.privacyAcknowledgement, "confirmation.privacyAcknowledgement", { max: 100 });
+    }
     return snapshot;
   } catch (error) {
     if (error instanceof ReportToIssueError) {
       throw new ReportToIssueError(
         "invalid_confirmation",
-        "confirmation must contain only the draft, preview digest, and GitHub login",
+        "confirmation must contain only the draft, preview digest, GitHub login, and optional privacy acknowledgement",
       );
     }
     throw error;
@@ -343,7 +350,9 @@ export function assertPrivateScanResponse(input) {
     "private scanner returned an invalid bounded receipt",
   );
   try {
-    if (!["passed", "blocked"].includes(snapshot.status)) invalid("scan status is invalid");
+    if (!["passed", "blocked", "manual_review_required"].includes(snapshot.status)) {
+      invalid("scan status is invalid");
+    }
     if (!["private_denylist", "generic_patterns_only"].includes(snapshot.coverage)) {
       invalid("scan coverage is invalid");
     }
@@ -362,6 +371,12 @@ export function assertPrivateScanResponse(input) {
     }
     if (snapshot.status === "passed" && snapshot.coverage !== "private_denylist") {
       invalid("a passed private scan must cover the private denylist");
+    }
+    if (
+      snapshot.status === "manual_review_required" &&
+      (snapshot.coverage !== "generic_patterns_only" || snapshot.findingCodes.length !== 0)
+    ) {
+      invalid("manual review is only valid for a clean generic-only scan");
     }
   } catch (error) {
     if (error instanceof ReportToIssueError) {
