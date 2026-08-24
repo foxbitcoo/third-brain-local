@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 function json(response, status, value) {
   response.writeHead(status, {
@@ -38,13 +39,20 @@ function assertLoopbackHost(request) {
   }
 }
 
+function isDisabledReportRoute(pathname) {
+  return pathname === "/api/public-workbench/report-history"
+    || pathname === "/api/public-workbench/reports"
+    || pathname.startsWith("/api/public-workbench/reports/");
+}
+
 export function createLocalHttpServer({ runtime, indexFile }) {
+  const indexPath = typeof indexFile === "string" ? indexFile : fileURLToPath(indexFile);
   return createServer(async (request, response) => {
     try {
       assertLoopbackHost(request);
       const url = new URL(request.url, "http://127.0.0.1");
       if (request.method === "GET" && url.pathname === "/") {
-        const html = await readFile(indexFile, "utf8");
+        const html = await readFile(indexPath, "utf8");
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
@@ -54,8 +62,22 @@ export function createLocalHttpServer({ runtime, indexFile }) {
         response.end(html);
         return;
       }
+      if (request.method === "GET" && url.pathname === "/workbench-ui.js") {
+        const script = await readFile(indexPath.replace(/index\.html$/u, "workbench-ui.js"), "utf8");
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(script);
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/status") return json(response, 200, await runtime.status());
       if (request.method === "GET" && url.pathname === "/api/workspace") return json(response, 200, await runtime.readWorkspace());
+      if (request.method === "GET" && url.pathname === "/api/public-workbench") return json(response, 200, await runtime.readPublicWorkbench());
+      if (isDisabledReportRoute(url.pathname)) {
+        return json(response, 404, { error: "feature_not_available", feature: "report_to_issue" });
+      }
       if (request.method === "POST" && url.pathname === "/oauth/wps/start") {
         assertSameOriginJson(request);
         return json(response, 200, { url: runtime.beginAuthorization().url });
@@ -78,6 +100,10 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "POST" && url.pathname === "/api/judgments") {
         assertSameOriginJson(request);
         return json(response, 200, await runtime.saveJudgment(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/public-workbench/conflicts") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.confirmPublicConflict(await body(request)));
       }
       json(response, 404, { error: "not_found" });
     } catch (error) {

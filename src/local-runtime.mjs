@@ -1,5 +1,6 @@
 import { buildWpsAuthorizationUrl, exchangeWpsAuthorizationCode } from "./wps-oauth.mjs";
 import { createWpsMessageClient } from "./wps-message-client.mjs";
+import { createPublicCandidateWorkbench } from "./public-workbench.mjs";
 
 export function createLocalTrialRuntime({
   config,
@@ -24,6 +25,7 @@ export function createLocalTrialRuntime({
       code,
     }),
   };
+  const publicWorkbench = createPublicCandidateWorkbench({ store, now });
 
   async function credentials() {
     const value = await store.read("credentials");
@@ -144,6 +146,12 @@ export function createLocalTrialRuntime({
         sources: workspace.sources || [],
         analysis: workspace.analysis || null,
       };
+    },
+    async readPublicWorkbench() {
+      return publicWorkbench.read();
+    },
+    async confirmPublicConflict(input) {
+      return publicWorkbench.confirmConflict(input);
     },
   });
 }

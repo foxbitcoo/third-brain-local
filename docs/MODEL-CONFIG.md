@@ -3,11 +3,13 @@
 本地包支持标准 OpenAI-compatible Chat Completions 接口，不限定服务商和模型。每位安装者填写自己的配置：
 
 ```text
-LLM_PROVIDER=deepseek
-LLM_BASE_URL=https://api.deepseek.com/chat/completions
-LLM_MODEL=deepseek-chat
+LLM_PROVIDER=
+LLM_BASE_URL=
+LLM_MODEL=
 LLM_API_KEY=
 ```
+
+上面是首次设置的中性模板；没有默认服务商、地址或模型。下表仅用于帮助你对照自己账号的配置，不会被程序自动写入。
 
 常见示例：
 
