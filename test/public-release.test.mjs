@@ -22,7 +22,6 @@ import {
   exchangeWpsAuthorizationCode,
 } from "../src/wps-oauth.mjs";
 import { createLocalTrialRuntime } from "../src/local-runtime.mjs";
-import { createLocalReportPrivacyScanner } from "../src/local-report-privacy.mjs";
 import { SYNTHETIC_CANDIDATES, createPublicCandidateWorkbench, validateCandidateSet } from "../src/public-workbench.mjs";
 import { PUBLIC_CANDIDATE_MANIFEST } from "../src/public-workbench-manifest.mjs";
 import { createWpsMessageClient } from "../src/wps-message-client.mjs";
@@ -50,30 +49,20 @@ test("公开版明确是可安装产品版，并声明 AGPL-3.0 与个人版单�
   assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/u);
 });
 
-test("公开版冻结 Report to Issue 的本地隐私门禁，但不把未接通的自动提交写成完成", async () => {
+test("公开 Alpha 明确未提供 Report to Issue，并将后续工作留给独立 Ticket", async () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const [readme, privacy, releaseSource] = await Promise.all([
+  const [readme, privacy, architecture, limits] = await Promise.all([
     readFile(path.join(root, "README.md"), "utf8"),
     readFile(path.join(root, "docs", "PRIVACY.md"), "utf8"),
-    readFile(path.join(root, "docs", "RELEASE-SOURCE.md"), "utf8"),
+    readFile(path.join(root, "docs", "ARCHITECTURE.md"), "utf8"),
+    readFile(path.join(root, "docs", "PREVIEW-LIMITS.md"), "utf8"),
   ]);
 
-  for (const content of [readme, privacy]) {
+  for (const content of [readme, privacy, architecture, limits]) {
     assert.match(content, /Report to Issue/u);
-    assert.match(content, /本机|本地/u);
-    assert.match(content, /隐私扫描/u);
-    assert.match(content, /完整预览/u);
-    assert.match(content, /本地草稿/u);
-    assert.match(content, /(?:没有|尚未).*?(?:GitHub|外部)/su);
-    assert.match(content, /manual_review_required/u);
-    assert.match(content, /私人标识未完全自动验证/u);
-    assert.match(content, /完整预览.*独立明确承认.*本地草稿/su);
-    assert.match(content, /(?:有 finding|发现风险).*阻断/su);
-    assert.match(content, /passed.*VERIFIED/su);
+    assert.match(content, /公开 Alpha.*(?:暂未提供|不提供)/u);
+    assert.match(content, /后续.*独立 Ticket/u);
   }
-
-  assert.match(releaseSource, /个人版.*公开版.*Report to Issue/su);
-  assert.match(releaseSource, /不包含.*真实数据.*竞品研究材料/su);
 });
 
 test("WPS 权限导览使用后台可搜索的 scope，并明确两项都选择 user", async () => {
@@ -422,19 +411,7 @@ test("冻结 manifest 拒绝最小证据、证据集合与冲突证据篡改", (
   })).accepted, false);
 });
 
-test("公开安装缺少私人 denylist 时 clean 报告进入人工复核而通用 finding 继续阻断", () => {
-  const scanner = createLocalReportPrivacyScanner();
-  const clean = scanner.scan({ issue: { title: "中性本地草稿", body: "只用于完整预览。" } });
-  assert.equal(clean.status, "manual_review_required");
-  assert.equal(clean.coverage, "generic_patterns_only");
-  assert.deepEqual(clean.findingCodes, []);
-  assert.match(clean.denylistDigest, /^[a-f0-9]{64}$/u);
-  const blocked = scanner.scan({ issue: { title: "本地草稿", body: "api_key=sample-placeholder" } });
-  assert.equal(blocked.status, "blocked");
-  assert.equal(blocked.findingCodes.includes("credential"), true);
-});
-
-test("公开合成工作台要求三字段冲突裁决，报告只在本地扫描、预览和确认", async () => {
+test("公开合成工作台要求三字段冲突裁决，且不暴露 Report 生命周期状态", async () => {
   const data = new Map();
   const store = {
     async read(key) { return data.get(key); },
@@ -443,12 +420,12 @@ test("公开合成工作台要求三字段冲突裁决，报告只在本地扫�
   const workbench = createPublicCandidateWorkbench({
     store,
     now: () => new Date("2026-08-24T00:00:00.000Z"),
-    localPrivacyScanner: { scan: () => ({ status: "passed", coverage: "private_denylist", scannerVersion: "synthetic-scanner", denylistDigest: "d".repeat(64), findingCodes: [] }) },
   });
   const initial = await workbench.read();
   assert.equal(initial.candidates.length, 7);
   assert.equal(initial.candidates.every((candidate) => candidate.lineage.status === "synthetic_7_of_7"), true);
   assert.equal(initial.automaticStateChanges, false);
+  assert.equal("reportSubmission" in initial, false);
   await assert.rejects(
     workbench.confirmConflict({ candidateId: "synthetic-candidate-06", eventType: "决策变化", businessStatement: "中性业务事实", occurredAt: "" }),
     /发生时间/,
@@ -468,35 +445,6 @@ test("公开合成工作台要求三字段冲突裁决，报告只在本地扫�
     occurredAt: "2026-01-01T09:00:00.000Z",
     confirmedAt: "2026-08-24T00:00:00.000Z",
   });
-
-  const blocked = await workbench.draftReport({
-    candidateId: "synthetic-candidate-01",
-    title: "本地草稿",
-    body: "api_key=sample-placeholder",
-  });
-  assert.equal(blocked.draft.privacy.status, "blocked");
-  assert.equal(blocked.preview.body.includes("sample-placeholder"), false);
-  assert.equal(JSON.stringify(await store.read("public-workbench")).includes("sample-placeholder"), false);
-  await assert.rejects(
-    workbench.confirmReport({ draftId: blocked.draft.id, previewDigest: blocked.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" }),
-    /隐私门禁/,
-  );
-
-  const safe = await workbench.draftReport({
-    candidateId: "synthetic-candidate-01",
-    title: "合成候选反馈",
-    body: "这是中性本地草稿，只用于确认预览流程。",
-  });
-  assert.equal(safe.draft.privacy.status, "passed");
-  await assert.rejects(
-    workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "确认" }),
-    /明确确认/,
-  );
-  const confirmed = await workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" });
-  assert.equal(confirmed.confirmed, true);
-  assert.equal(confirmed.submission, "NOT_IMPLEMENTED");
-  const repeated = await workbench.confirmReport({ draftId: safe.draft.id, previewDigest: safe.draft.previewDigest, acknowledgement: "CONFIRM_LOCAL_DRAFT" });
-  assert.deepEqual(repeated.receipt, confirmed.receipt);
 });
 
 test("发布检查拒绝凭证、私人绝对路径、私有云文档链接和数据文件", async () => {
@@ -768,6 +716,66 @@ test("本地写操作拒绝跨站或非 JSON 请求，不能被网页静默触�
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("公开 Alpha 将所有 Report HTTP 路由收口为 feature_not_available，且不调用运行时", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-report-disabled-"));
+  const indexFile = path.join(root, "index.html");
+  await writeFile(indexFile, "<!doctype html><title>local</title>", "utf8");
+  let reportCalls = 0;
+  const server = createLocalHttpServer({
+    indexFile,
+    runtime: {
+      async status() { return {}; },
+      async readWorkspace() { return {}; },
+      async draftPublicIssue() { reportCalls += 1; },
+      async confirmPublicIssue() { reportCalls += 1; },
+      async readPublicIssue() { reportCalls += 1; },
+      async readLatestPublicIssue() { reportCalls += 1; },
+      async correctPublicIssue() { reportCalls += 1; },
+      async revokePublicIssueConfirmation() { reportCalls += 1; },
+      async readPublicIssueHistory() { reportCalls += 1; },
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const origin = `http://127.0.0.1:${port}`;
+  try {
+    for (const [method, pathname] of [
+      ["POST", "/api/public-workbench/reports"],
+      ["POST", "/api/public-workbench/reports/confirm"],
+      ["GET", "/api/public-workbench/reports/latest?candidateId=synthetic-candidate-01"],
+      ["GET", "/api/public-workbench/reports/draft-1"],
+      ["GET", "/api/public-workbench/report-history?draftId=draft-1"],
+      ["POST", "/api/public-workbench/reports/correct"],
+      ["POST", "/api/public-workbench/reports/revoke"],
+    ]) {
+      const response = await fetch(origin + pathname, {
+        method,
+        headers: method === "POST" ? { origin, "content-type": "application/json" } : undefined,
+        body: method === "POST" ? "{}" : undefined,
+      });
+      assert.equal(response.status, 404, `${method} ${pathname}`);
+      assert.deepEqual(await response.json(), { error: "feature_not_available", feature: "report_to_issue" });
+    }
+    assert.equal(reportCalls, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("公开工作台页面不保留 Report UI、说明或路由调用", async () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const [page, script] = await Promise.all([
+    readFile(path.join(root, "public", "index.html"), "utf8"),
+    readFile(path.join(root, "public", "workbench-ui.js"), "utf8"),
+  ]);
+  const publicSurface = page + script;
+  for (const pattern of [/Report to Issue/u, /本地草稿/u, /report-history/u, /\/reports/u]) {
+    assert.doesNotMatch(publicSurface, pattern);
+  }
+  assert.match(publicSurface, /确认三字段裁决/u);
+  assert.match(script, /\/api\/public-workbench\/conflicts/u);
 });
 
 test("WPS 会话自动翻页，消息达到安全上限时必须显式报告截断", async () => {

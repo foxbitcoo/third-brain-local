@@ -50,41 +50,6 @@ function renderRoute() {
   });
 }
 
-function reportOutput(candidateId, html) {
-  const output = byId("report-result-" + candidateId);
-  output.hidden = false;
-  output.innerHTML = html;
-}
-
-function draftControls(candidateId, draft, history) {
-  const events = history?.history?.events || [];
-  const revokedReceiptIds = new Set((history?.history?.revocations || []).map((revocation) => revocation.receiptId));
-  const receipt = (history?.history?.confirmations || []).findLast((confirmation) =>
-    confirmation.draftRevision === history.history.currentRevision
-      && !revokedReceiptIds.has(confirmation.receiptId));
-  const lifecycle = events.length
-    ? "本地记录：" + events.map((event) => escapeHtml(event.type)).join(" → ")
-    : "本地草稿尚未确认。";
-  const revoke = receipt
-    ? "<button class=\"secondary\" onclick=\"revokeReportConfirmation('" + candidateId + "','" + receipt.receiptId + "')\">撤销本地确认</button>"
-    : "";
-  const privacyNotice = draft.privacy.status === "manual_review_required"
-    ? "<p class=\"error\">人工复核记录：私人标识未完全自动验证；本地确认不代表隐私验证通过。</p>"
-    : draft.privacy.status === "blocked"
-      ? "<p class=\"error\">隐私门禁阻断。</p>"
-      : draft.privacy.status === "passed"
-        ? "<p>私人 denylist 严格扫描已通过。</p>"
-        : "<p class=\"error\">私人扫描尚未完成。</p>";
-  return "<p>本地草稿 · r" + escapeHtml(draft.revision) + " · 外部提交：NOT_IMPLEMENTED</p>" + privacyNotice
-    + "<b>" + escapeHtml(draft.issue.title) + "</b><p>" + escapeHtml(draft.issue.body) + "</p>"
-    + "<p class=\"workbench-note\">" + lifecycle + "</p><p>"
-    + "<button class=\"secondary\" onclick=\"readReportHistory('" + candidateId + "','" + draft.id + "')\">查看历史</button> "
-    + "<button class=\"secondary\" onclick=\"refreshReport('" + candidateId + "')\">刷新回读</button> " + revoke + "</p>"
-    + "<div class=\"workbench-form\"><input id=\"correct-title-" + candidateId + "\" placeholder=\"更正后的本地报告标题\">"
-    + "<textarea id=\"correct-body-" + candidateId + "\" placeholder=\"更正后的本地报告正文\"></textarea>"
-    + "<button onclick=\"correctReport('" + candidateId + "','" + draft.id + "'," + draft.revision + ")\">保存本地更正</button></div>";
-}
-
 function candidateCard(candidate) {
   const conflict = candidate.conflictingClaims
     ? "<p class=\"workbench-note\">冲突说法：" + candidate.conflictingClaims
@@ -102,114 +67,14 @@ function candidateCard(candidate) {
     + "<br>待判断：" + escapeHtml(candidate.userDecision) + " · 推荐：" + escapeHtml(candidate.recommendation)
     + "</p><span class=\"pill " + (candidate.lineage.accepted === 7 ? "ok" : "") + "\">候选集谱系 "
     + candidate.lineage.accepted + "/" + candidate.lineage.expected + " · " + escapeHtml(candidate.lineage.status)
-    + "</span>" + conflict + "<div class=\"workbench-form\"><input id=\"report-title-" + candidate.id
-    + "\" placeholder=\"本地报告标题\"><textarea id=\"report-body-" + candidate.id
-    + "\" placeholder=\"本地报告正文：不要写入办公原文、人员、凭证、内部链接或本机路径。\"></textarea>"
-    + "<button onclick=\"draftReport('" + candidate.id + "')\">扫描并完整预览本地草稿</button></div>"
-    + "<div id=\"report-result-" + candidate.id + "\" class=\"result\" hidden></div></article>";
+    + "</span>" + conflict + "</article>";
 }
 
 async function renderWorkbench() {
   const workbench = await request("/api/public-workbench");
-  byId("workbench").innerHTML = "<p class=\"workbench-label\">候选区 · 判读区 · 冲突确认区 · 仅本地报告区</p>"
+  byId("workbench").innerHTML = "<p class=\"workbench-label\">候选区 · 判读区 · 冲突确认区</p>"
     + workbench.candidates.map(candidateCard).join("");
-  await Promise.all(workbench.candidates.map((candidate) => window.refreshReport(candidate.id)));
 }
-
-window.refreshReport=async (candidateId) => {
-  try {
-    const result = await request("/api/public-workbench/reports/latest?candidateId=" + encodeURIComponent(candidateId));
-    const history = await request("/api/public-workbench/report-history?draftId=" + encodeURIComponent(result.draft.id));
-    reportOutput(candidateId, draftControls(candidateId, result.draft, history));
-  } catch (error) {
-    if (error.message !== "no local report exists for this synthetic candidate") {
-      reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-    }
-  }
-};
-
-window.readReportHistory=async (candidateId, draftId) => {
-  try {
-    const result = await request("/api/public-workbench/report-history?draftId=" + encodeURIComponent(draftId));
-    const events = result.history.events.map((event) => escapeHtml(event.type)).join(" → ") || "尚无历史";
-    reportOutput(candidateId, "<p>本地生命周期：" + events + "</p><p>外部提交：NOT_IMPLEMENTED</p>"
-      + "<button class=\"secondary\" onclick=\"refreshReport('" + candidateId + "')\">返回草稿并刷新回读</button>");
-  } catch (error) {
-    reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-  }
-};
-
-window.draftReport=async (candidateId) => {
-  try {
-    const result = await post("/api/public-workbench/reports", {
-      candidateId,
-      title: byId("report-title-" + candidateId).value,
-      body: byId("report-body-" + candidateId).value,
-    });
-    if (result.draft.privacy.status === "blocked") {
-      reportOutput(candidateId, "<p class=\"error\">隐私门禁未通过；原始内容未被保存或返回。</p>");
-      return;
-    }
-    if (result.draft.privacy.status === "manual_review_required") {
-      reportOutput(candidateId, "<p class=\"error\">需要人工复核：通用规则未发现风险，但私人标识未完全自动验证。</p>"
-        + "<p>请逐字检查以下完整预览；这不是隐私验证通过，也不会外部提交。</p><b>"
-        + escapeHtml(result.preview.title) + "</b><p>" + escapeHtml(result.preview.body) + "</p>"
-        + "<label><input type=\"checkbox\" id=\"manual-review-ack-" + candidateId
-        + "\"> 我确认已完整预览，并承认私人标识未完全自动验证。</label><p><button onclick=\"confirmReport('"
-        + candidateId + "','" + result.draft.id + "','" + result.draft.previewDigest
-        + "',true)\">仅保存本地草稿</button></p>");
-      return;
-    }
-    reportOutput(candidateId, "<p>隐私门禁通过。完整预览：</p><b>" + escapeHtml(result.preview.title)
-      + "</b><p>" + escapeHtml(result.preview.body) + "</p><button onclick=\"confirmReport('" + candidateId
-      + "','" + result.draft.id + "','" + result.draft.previewDigest + "',false)\">我已完整检查，仅确认本地草稿</button>");
-  } catch (error) {
-    reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-  }
-};
-
-window.confirmReport=async (candidateId, draftId, previewDigest, manualReview) => {
-  try {
-    if (manualReview && !byId("manual-review-ack-" + candidateId).checked) {
-      throw new Error("请先明确承认私人标识未完全自动验证");
-    }
-    await post("/api/public-workbench/reports/confirm", {
-      draftId,
-      previewDigest,
-      acknowledgement: "CONFIRM_LOCAL_DRAFT",
-      ...(manualReview ? {
-        privacyAcknowledgement: "ACKNOWLEDGE_PRIVATE_IDENTIFIERS_NOT_FULLY_VERIFIED",
-      } : {}),
-    });
-    await window.refreshReport(candidateId);
-  } catch (error) {
-    reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-  }
-};
-
-window.correctReport=async (candidateId, draftId, expectedRevision) => {
-  try {
-    await post("/api/public-workbench/reports/correct", {
-      candidateId,
-      draftId,
-      expectedRevision,
-      title: byId("correct-title-" + candidateId).value,
-      body: byId("correct-body-" + candidateId).value,
-    });
-    await window.refreshReport(candidateId);
-  } catch (error) {
-    reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-  }
-};
-
-window.revokeReportConfirmation=async (candidateId, receiptId) => {
-  try {
-    await post("/api/public-workbench/reports/revoke", { receiptId });
-    await window.refreshReport(candidateId);
-  } catch (error) {
-    reportOutput(candidateId, "<p class=\"error\">" + escapeHtml(error.message) + "</p>");
-  }
-};
 
 window.confirmConflict=async (candidateId) => {
   try {

@@ -1,9 +1,8 @@
-import {
-  canonicalDigest,
-  createReportToIssueService,
-  ReportToIssueError,
-} from "./report-to-issue/index.mjs";
+import { createHash } from "node:crypto";
+
 import { PUBLIC_CANDIDATE_MANIFEST } from "./public-workbench-manifest.mjs";
+function canonicalJson(value) { if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`; if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`; return JSON.stringify(value); }
+function canonicalDigest(domain, value) { return createHash("sha256").update(`${domain}\0`).update(canonicalJson(value)).digest("hex"); }
 const ref = (index) => Object.freeze({ id: `synthetic-evidence-0${index}`, revision: "synthetic-r1", fingerprint: `${index}`.repeat(64) });
 const DETAILS = Object.freeze([
   ["范围变化", "范围被明确增加或缩减，且仍需决定是否保留。", "是否保留为后续候选？", "synthetic_source_alpha", "synthetic_participant_alpha", "决策变化"],
@@ -24,58 +23,6 @@ const SYNTHETIC_CANDIDATES = Object.freeze(DETAILS.map(([kind, rule, question, s
 const FROZEN_EVENT_TYPES = new Set(["决策变化", "责任归属变化", "下一步变化", "进展／完成变化", "阻塞／风险变化", "时间点／截止期限变化"]);
 function nonEmpty(value, label) { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} 必须明确填写`); return value.trim(); }
 function isoTime(value) { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) || !Number.isFinite(Date.parse(value))) throw new Error("发生时间必须是 ISO UTC 时间"); return value; }
-function publicSource(candidate) {
-  const frozen = PUBLIC_CANDIDATE_MANIFEST.candidates.find((item) => item.id === candidate.id);
-  if (frozen === undefined) throw new Error("合成候选不在冻结 manifest 中");
-  return {
-    branch: "public-local-workbench",
-    commit: PUBLIC_CANDIDATE_MANIFEST.manifestDigest,
-    files: [{
-      path: `public/synthetic-candidates/${candidate.id}.json`,
-      contentDigest: frozen.candidateDigest,
-      diffDigest: frozen.sourceDiffDigest,
-    }],
-  };
-}
-
-function publicReportInput(candidate, title, body) {
-  return {
-    edition: "public",
-    report: {
-      title,
-      reproductionSteps: [candidate.minimumEvidence],
-      expectedResult: "The synthetic local report remains a preview-only record.",
-      actualResult: body,
-      diagnostics: {
-        version: "public-local-workbench",
-        operatingSystem: "local installation",
-        installMethod: "local-only public workbench",
-        failedStage: "candidate review",
-        errorCode: candidate.id,
-      },
-    },
-    source: publicSource(candidate),
-    attachments: [],
-  };
-}
-
-function reportRecordStore(records) {
-  const data = new Map(records.map((record) => [record.draftId, structuredClone(record)]));
-  const receiptToDraft = new Map();
-  const index = (record) => (record.confirmations || []).forEach((receipt) => receiptToDraft.set(receipt.receiptId, record.draftId));
-  data.forEach(index);
-  return {
-    load(draftId) { return data.has(draftId) ? structuredClone(data.get(draftId)) : null; },
-    save(record) { const copy = structuredClone(record); data.set(copy.draftId, copy); index(copy); },
-    loadByReceipt(receiptId) { const draftId = receiptToDraft.get(receiptId); return draftId ? structuredClone(data.get(draftId)) : null; },
-    values() { return [...data.values()].map((record) => structuredClone(record)); },
-  };
-}
-
-function publicDraftView(draft) {
-  return { ...draft, id: draft.draftId };
-}
-
 function exactFields(value, fields) {
   return value !== null
     && typeof value === "object"
@@ -155,113 +102,18 @@ export function validateCandidateSet(candidates = SYNTHETIC_CANDIDATES) {
   }
   return { accepted: true, reason: "synthetic_7_of_7" };
 }
-export function createPublicCandidateWorkbench({ store, now = () => new Date(), localPrivacyScanner } = {}) {
+export function createPublicCandidateWorkbench({ store, now = () => new Date() } = {}) {
   if (!store) throw new TypeError("local store is required");
-  const pendingManualReports = new Map();
   const readState = async () => {
     const state = (await store.read("public-workbench")) || {};
     return {
       conflicts: Array.isArray(state.conflicts) ? state.conflicts : [],
-      reportRecords: Array.isArray(state.reportRecords) ? state.reportRecords : [],
-      reportLinks: Array.isArray(state.reportLinks) ? state.reportLinks : [],
     };
   };
   const getCandidate = (id) => { const valid = validateCandidateSet(); if (!valid.accepted) throw new Error("合成候选集不完整或存在歧义，已拒绝继续操作"); const item = SYNTHETIC_CANDIDATES.find((candidate) => candidate.id === id); if (!item) throw new Error("合成候选不存在"); return item; };
-  const reportService = (state) => {
-    const records = reportRecordStore(state.reportRecords);
-    return {
-      core: createReportToIssueService({
-        store: records,
-        localPrivacyScanner,
-        now: () => now().toISOString(),
-      }),
-      records,
-    };
-  };
-  const saveReports = async (state, records) => {
-    state.reportRecords = records.values();
-    await store.write("public-workbench", state);
-  };
   return Object.freeze({
-    async read() { const state = await readState(); const setLineage = validateCandidateSet(); return { mode: "synthetic_local_only", candidateOnly: true, automaticStateChanges: false, setLineage, reportSubmission: "NOT_IMPLEMENTED", candidates: SYNTHETIC_CANDIDATES.map((item) => ({ ...item, actor: item.participantLabel, userDecision: item.question, lineage: { expected: 7, accepted: setLineage.accepted ? 7 : 0, status: setLineage.reason }, conflict: state.conflicts.find((record) => record.candidateId === item.id) || null })) }; },
+    async read() { const state = await readState(); const setLineage = validateCandidateSet(); return { mode: "synthetic_local_only", candidateOnly: true, automaticStateChanges: false, setLineage, candidates: SYNTHETIC_CANDIDATES.map((item) => ({ ...item, actor: item.participantLabel, userDecision: item.question, lineage: { expected: 7, accepted: setLineage.accepted ? 7 : 0, status: setLineage.reason }, conflict: state.conflicts.find((record) => record.candidateId === item.id) || null })) }; },
     async confirmConflict({ candidateId, eventType, businessStatement, occurredAt }) { const item = getCandidate(candidateId); if (!item.conflictingClaims) throw new Error("只有合成冲突候选可进行冲突确认"); const type = nonEmpty(eventType, "事件类型"); if (!FROZEN_EVENT_TYPES.has(type)) throw new Error("事件类型不在公开工作台的冻结集合中"); const record = { candidateId, eventType: type, businessStatement: nonEmpty(businessStatement, "业务事实"), occurredAt: isoTime(occurredAt), confirmedAt: now().toISOString() }; const state = await readState(); state.conflicts = [...state.conflicts.filter((value) => value.candidateId !== candidateId), record]; await store.write("public-workbench", state); return { confirmed: true, conflict: structuredClone(record), semantics: "candidate_only" }; },
-    async draftReport({ candidateId, title, body }) {
-      const candidate = getCandidate(candidateId);
-      const state = await readState();
-      const { core, records } = reportService(state);
-      const draft = core.createDraft(publicReportInput(candidate, nonEmpty(title, "报告标题"), nonEmpty(body, "报告正文")));
-      if (draft.privacy.status === "manual_review_required") {
-        pendingManualReports.set(draft.draftId, {
-          candidateId,
-          record: records.load(draft.draftId),
-        });
-        return { draft: publicDraftView(draft), preview: draft.issue, submission: "NOT_IMPLEMENTED" };
-      }
-      state.reportLinks.push({ draftId: draft.draftId, candidateId });
-      await saveReports(state, records);
-      return { draft: publicDraftView(draft), preview: draft.issue, submission: "NOT_IMPLEMENTED" };
-    },
-    async readReport({ draftId }) {
-      const state = await readState();
-      const { core } = reportService(state);
-      return { draft: publicDraftView(core.readDraft(draftId)), submission: "NOT_IMPLEMENTED" };
-    },
-    async readLatestReport({ candidateId }) {
-      getCandidate(candidateId);
-      const state = await readState();
-      const link = state.reportLinks.filter((item) => item.candidateId === candidateId).at(-1);
-      if (!link) throw new ReportToIssueError("draft_not_found", "no local report exists for this synthetic candidate");
-      const { core } = reportService(state);
-      return { draft: publicDraftView(core.readDraft(link.draftId)), submission: "NOT_IMPLEMENTED" };
-    },
-    async confirmReport({ draftId, previewDigest, acknowledgement, privacyAcknowledgement, githubLogin = "local-preview-user" }) {
-      if (acknowledgement !== "CONFIRM_LOCAL_DRAFT") throw new Error("必须明确确认已完整检查本地报告");
-      const state = await readState();
-      const pending = pendingManualReports.get(draftId);
-      const records = reportRecordStore([
-        ...state.reportRecords,
-        ...(pending ? [pending.record] : []),
-      ]);
-      const core = createReportToIssueService({
-        store: records,
-        localPrivacyScanner,
-        now: () => now().toISOString(),
-      });
-      const receipt = core.confirmDraft({
-        draftId,
-        previewDigest,
-        githubIdentity: { login: githubLogin },
-        ...(privacyAcknowledgement === undefined ? {} : { privacyAcknowledgement }),
-      });
-      if (pending) {
-        state.reportLinks.push({ draftId, candidateId: pending.candidateId });
-        pendingManualReports.delete(draftId);
-      }
-      await saveReports(state, records);
-      return { confirmed: true, receipt, submission: "NOT_IMPLEMENTED" };
-    },
-    async correctReport({ draftId, expectedRevision, candidateId, title, body }) {
-      const candidate = getCandidate(candidateId);
-      const state = await readState();
-      const link = state.reportLinks.find((item) => item.draftId === draftId);
-      if (!link || link.candidateId !== candidateId) throw new ReportToIssueError("draft_not_found", "local report does not belong to this synthetic candidate");
-      const { core, records } = reportService(state);
-      const draft = core.correctDraft({ draftId, expectedRevision, replacement: publicReportInput(candidate, nonEmpty(title, "报告标题"), nonEmpty(body, "报告正文")), reason: "user_correction" });
-      await saveReports(state, records);
-      return { draft: publicDraftView(draft), submission: "NOT_IMPLEMENTED" };
-    },
-    async revokeReportConfirmation({ receiptId }) {
-      const state = await readState();
-      const { core, records } = reportService(state);
-      const revocation = core.revokeConfirmation({ receiptId, reason: "user_revoked" });
-      await saveReports(state, records);
-      return { revocation, submission: "NOT_IMPLEMENTED" };
-    },
-    async readReportHistory({ draftId }) {
-      const state = await readState();
-      const { core } = reportService(state);
-      return { history: core.readConfirmationHistory(draftId), submission: "NOT_IMPLEMENTED" };
-    },
   });
 }
 export { SYNTHETIC_CANDIDATES };

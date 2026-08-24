@@ -39,6 +39,12 @@ function assertLoopbackHost(request) {
   }
 }
 
+function isDisabledReportRoute(pathname) {
+  return pathname === "/api/public-workbench/report-history"
+    || pathname === "/api/public-workbench/reports"
+    || pathname.startsWith("/api/public-workbench/reports/");
+}
+
 export function createLocalHttpServer({ runtime, indexFile }) {
   const indexPath = typeof indexFile === "string" ? indexFile : fileURLToPath(indexFile);
   return createServer(async (request, response) => {
@@ -69,6 +75,9 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "GET" && url.pathname === "/api/status") return json(response, 200, await runtime.status());
       if (request.method === "GET" && url.pathname === "/api/workspace") return json(response, 200, await runtime.readWorkspace());
       if (request.method === "GET" && url.pathname === "/api/public-workbench") return json(response, 200, await runtime.readPublicWorkbench());
+      if (isDisabledReportRoute(url.pathname)) {
+        return json(response, 404, { error: "feature_not_available", feature: "report_to_issue" });
+      }
       if (request.method === "POST" && url.pathname === "/oauth/wps/start") {
         assertSameOriginJson(request);
         return json(response, 200, { url: runtime.beginAuthorization().url });
@@ -95,32 +104,6 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "POST" && url.pathname === "/api/public-workbench/conflicts") {
         assertSameOriginJson(request);
         return json(response, 200, await runtime.confirmPublicConflict(await body(request)));
-      }
-      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports") {
-        assertSameOriginJson(request);
-        return json(response, 200, await runtime.draftPublicIssue(await body(request)));
-      }
-      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/confirm") {
-        assertSameOriginJson(request);
-        return json(response, 200, await runtime.confirmPublicIssue(await body(request)));
-      }
-      if (request.method === "GET" && url.pathname === "/api/public-workbench/reports/latest") {
-        return json(response, 200, await runtime.readLatestPublicIssue({ candidateId: url.searchParams.get("candidateId") }));
-      }
-      if (request.method === "GET" && url.pathname.startsWith("/api/public-workbench/reports/")) {
-        const draftId = url.pathname.slice("/api/public-workbench/reports/".length);
-        if (draftId && !draftId.includes("/")) return json(response, 200, await runtime.readPublicIssue({ draftId }));
-      }
-      if (request.method === "GET" && url.pathname === "/api/public-workbench/report-history") {
-        return json(response, 200, await runtime.readPublicIssueHistory({ draftId: url.searchParams.get("draftId") }));
-      }
-      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/correct") {
-        assertSameOriginJson(request);
-        return json(response, 200, await runtime.correctPublicIssue(await body(request)));
-      }
-      if (request.method === "POST" && url.pathname === "/api/public-workbench/reports/revoke") {
-        assertSameOriginJson(request);
-        return json(response, 200, await runtime.revokePublicIssueConfirmation(await body(request)));
       }
       json(response, 404, { error: "not_found" });
     } catch (error) {
