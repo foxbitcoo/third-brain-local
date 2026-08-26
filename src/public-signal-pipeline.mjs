@@ -139,19 +139,23 @@ function cUnits(evidence) {
 
 function uniqueCurrentEvidence(evidence) {
   const byId = new Map();
+  const fingerprintsByRevision = new Map();
   for (const item of evidence) {
     if (typeof item?.evidenceId !== "string"
       || !Number.isSafeInteger(item?.revision) || item.revision < 1
       || typeof item?.fingerprint !== "string" || !item.fingerprint) {
       throw new TypeError("Evidence identity is invalid");
     }
+    const revisionKey = `${item.evidenceId}\0${item.revision}`;
+    const knownFingerprint = fingerprintsByRevision.get(revisionKey);
+    if (knownFingerprint && knownFingerprint !== item.fingerprint) {
+      throw new Error("同一 Evidence revision 出现冲突内容；未进入模型分析");
+    }
+    fingerprintsByRevision.set(revisionKey, item.fingerprint);
     const current = byId.get(item.evidenceId);
     if (!current || item.revision > current.revision) {
       byId.set(item.evidenceId, item);
       continue;
-    }
-    if (item.revision === current.revision && item.fingerprint !== current.fingerprint) {
-      throw new Error("同一 Evidence revision 出现冲突内容；未进入模型分析");
     }
   }
   return [...byId.values()];
@@ -216,10 +220,15 @@ function fuseCandidates(candidates, evidenceById) {
       .filter(Boolean)
       .toSorted((left, right) => left.occurredAt.localeCompare(right.occurredAt));
     const latest = evidence.at(-1)?.occurredAt ?? "";
+    const sortedEvidenceIds = candidate.evidenceIds.toSorted().join("\0");
     return Object.freeze({
       candidateId: `candidate_${digest(
+        "third-brain/public-candidate/v2",
+        `${candidate.eventType}\0${candidate.semanticKey}\0${sortedEvidenceIds}`,
+      ).slice(0, 24)}`,
+      legacyCandidateId: `candidate_${digest(
         "third-brain/public-candidate/v1",
-        `${candidate.eventType}\0${candidate.semanticKey}\0${candidate.evidenceIds.toSorted().join("\0")}`,
+        `${candidate.semanticKey}\0${sortedEvidenceIds}`,
       ).slice(0, 24)}`,
       revision: 1,
       eventType: candidate.eventType,

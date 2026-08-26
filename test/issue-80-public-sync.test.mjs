@@ -85,6 +85,8 @@ test("B 单条与 C 连续上下文并行抽取后按 Evidence 血缘去重", as
   assert.equal(calls[0].units.length, 2);
   assert.equal(calls[1].units.length, 1);
   assert.equal(result.candidates.length, 1);
+  assert.match(result.candidates[0].legacyCandidateId, /^candidate_[a-f0-9]{24}$/u);
+  assert.notEqual(result.candidates[0].legacyCandidateId, result.candidates[0].candidateId);
   assert.deepEqual(result.candidates[0].strategies, ["B", "C"]);
   assert.deepEqual(
     result.candidates[0].evidence.map((item) => item.evidenceId).toSorted(),
@@ -262,7 +264,7 @@ test("B/C 只接收唯一且最高 revision 的 Evidence，冲突 revision 拒�
   assert.equal(calls[1].units[0].items[0].revision, 2);
 
   await assert.rejects(
-    pipeline.run([first, { ...secondBuilt, revision: 1 }]),
+    pipeline.run([second, first, { ...secondBuilt, revision: 1 }]),
     /同一 Evidence revision 出现冲突内容/u,
   );
   assert.equal(calls.length, 2, "冲突 Evidence 不能进入任一模型策略");
@@ -335,9 +337,12 @@ test("真实导入候选必须先确认工作归属，再确认重要性并产�
 
   assert.equal(receipt.ripple.workEventCreated, true);
   assert.equal(writeCount, 1, "Decision、WorkEvent、WorkThread 与 CurrentState 必须一次原子写入");
-  assert.equal(readback.analysis.decisions.length, 1);
+  assert.equal("decisions" in readback.analysis, false, "正式 Decision 不能镜像回分析态");
+  assert.equal(readback.decisions.length, 1);
+  assert.equal(readback.decisionReceipts.length, 1);
   assert.equal(readback.workThreads.length, 1);
   assert.equal(readback.workEvents.length, 1);
+  assert.equal(readback.workEvents[0].eventType, "时间点／截止期限变化");
   assert.equal(readback.currentStates.length, 1);
   assert.equal(readback.currentStates[0].latestChange, "出现明确时间安排。");
 });
@@ -394,24 +399,24 @@ test("再次导入和重新分析不会清空已经确认的业务状态", async
   await restartedRuntime.listChats();
   await restartedRuntime.importMessages({ chatIds: ["source-direct"], days: 1 });
   const afterImport = await restartedRuntime.readWorkspace();
-  assert.equal(afterImport.analysis.decisions.length, 1);
+  assert.equal("decisions" in afterImport.analysis, false);
   assert.equal(afterImport.decisions.length, 1);
   assert.equal(afterImport.workThreads.length, 1);
   assert.equal(afterImport.workEvents.length, 1);
   assert.equal(afterImport.currentStates.length, 1);
-  assert.equal(afterImport.analysis.decisions[0].decisionId, firstReceipt.decision.decisionId);
+  assert.equal(afterImport.decisions[0].decisionId, firstReceipt.decision.decisionId);
 
   await restartedRuntime.analyzeImportedMessages();
   const afterAnalysis = await restartedRuntime.readWorkspace();
-  assert.equal(afterAnalysis.analysis.decisions.length, 1);
+  assert.equal("decisions" in afterAnalysis.analysis, false);
   assert.equal(afterAnalysis.decisions.length, 1);
   assert.equal(afterAnalysis.workThreads.length, 1);
   assert.equal(afterAnalysis.workEvents.length, 1);
   assert.equal(afterAnalysis.currentStates.length, 1);
-  assert.equal(afterAnalysis.analysis.decisions[0].decisionId, firstReceipt.decision.decisionId);
+  assert.equal(afterAnalysis.decisions[0].decisionId, firstReceipt.decision.decisionId);
 });
 
-test("相同归属和重要性重试及并发返回同一份可回读回执", async () => {
+test("跨 runtime 的相同归属和重要性并发返回同一份可回读回执", async () => {
   const records = new Map();
   const store = {
     async read(key) {
@@ -430,6 +435,7 @@ test("相同归属和重要性重试及并发返回同一份可回读回执", as
     analysis: {
       candidates: [{
         candidateId: "candidate_stable",
+        eventType: "进展／完成变化",
         latestChange: "出现明确变化。",
         background: "最少必要背景。",
         userDecision: "是否继续推进？",
@@ -437,30 +443,33 @@ test("相同归属和重要性重试及并发返回同一份可回读回执", as
         evidence: [],
       }],
       ownershipDrafts: [],
-      decisions: [],
     },
+    decisions: [],
+    decisionReceipts: [],
     workThreads: [],
     workEvents: [],
     currentStates: [],
   });
   let tick = 0;
-  const runtime = createLocalTrialRuntime({
+  const runtimeOptions = {
     config: { ready: true, wps: {} },
     store,
     oauth: {},
     inference: { async analyze() { return {}; } },
     now: () => new Date(Date.parse(iso(30)) + tick++ * 1_000),
-  });
+  };
+  const runtime = createLocalTrialRuntime(runtimeOptions);
+  const concurrentRuntime = createLocalTrialRuntime(runtimeOptions);
   const ownership = { candidateId: "candidate_stable", kind: "new_work_thread", threadTitle: "稳定事项" };
   const [ownershipA, ownershipB] = await Promise.all([
     runtime.saveOwnership(ownership),
-    runtime.saveOwnership(ownership),
+    concurrentRuntime.saveOwnership(ownership),
   ]);
   assert.deepEqual(ownershipA.ownership, ownershipB.ownership);
 
   const [receiptA, receiptB] = await Promise.all([
     runtime.saveImportance({ candidateId: "candidate_stable", importance: "current_important" }),
-    runtime.saveImportance({ candidateId: "candidate_stable", importance: "current_important" }),
+    concurrentRuntime.saveImportance({ candidateId: "candidate_stable", importance: "current_important" }),
   ]);
   assert.deepEqual(receiptA, receiptB);
   assert.deepEqual(
@@ -468,7 +477,9 @@ test("相同归属和重要性重试及并发返回同一份可回读回执", as
     receiptA,
   );
   const readback = await runtime.readWorkspace();
-  assert.equal(readback.analysis.decisions.length, 1);
+  assert.equal("decisions" in readback.analysis, false);
+  assert.equal(readback.decisions.length, 1);
+  assert.deepEqual(readback.decisionReceipts, [receiptA]);
   assert.equal(readback.workThreads.length, 1);
   assert.equal(readback.workEvents.length, 1);
   assert.equal(readback.currentStates.length, 1);
@@ -480,6 +491,165 @@ test("相同归属和重要性重试及并发返回同一份可回读回执", as
   await assert.rejects(
     runtime.saveOwnership({ candidateId: "candidate_stable", kind: "not_current_work" }),
     /纠错、撤销或恢复尚未开放/u,
+  );
+});
+
+test("两个独立加密 store 实例指向同一目录时也不丢失并发决策", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-public-concurrent-store-"));
+  const storeA = await createEncryptedLocalStore({ root });
+  const storeB = await createEncryptedLocalStore({ root });
+  await storeA.write("workspace", {
+    analysis: {
+      candidates: [{
+        candidateId: "candidate_cross_store",
+        eventType: "下一步变化",
+        latestChange: "形成明确下一步。",
+        background: "最少必要背景。",
+        userDecision: "是否跟进？",
+        latestOccurredAt: iso(0),
+        evidence: [],
+      }],
+      ownershipDrafts: [],
+    },
+    decisions: [],
+    decisionReceipts: [],
+    workThreads: [],
+    workEvents: [],
+    currentStates: [],
+  });
+  let tick = 0;
+  const runtimeOptions = (store) => ({
+    config: { ready: true, wps: {} },
+    store,
+    oauth: {},
+    inference: { async analyze() { return {}; } },
+    now: () => new Date(Date.parse(iso(30)) + tick++ * 1_000),
+  });
+  const runtimeA = createLocalTrialRuntime(runtimeOptions(storeA));
+  const runtimeB = createLocalTrialRuntime(runtimeOptions(storeB));
+  const ownership = { candidateId: "candidate_cross_store", kind: "new_work_thread", threadTitle: "跨 store 事项" };
+  await Promise.all([runtimeA.saveOwnership(ownership), runtimeB.saveOwnership(ownership)]);
+  const [receiptA, receiptB] = await Promise.all([
+    runtimeA.saveImportance({ candidateId: "candidate_cross_store", importance: "current_important" }),
+    runtimeB.saveImportance({ candidateId: "candidate_cross_store", importance: "current_important" }),
+  ]);
+  assert.deepEqual(receiptA, receiptB);
+  const readback = await runtimeB.readWorkspace();
+  assert.equal(readback.decisions.length, 1);
+  assert.equal(readback.decisionReceipts.length, 1);
+  assert.equal(readback.workThreads.length, 1);
+  assert.equal(readback.workEvents.length, 1);
+  assert.equal(readback.currentStates.length, 1);
+});
+
+test("升级后的 v2 候选会继承旧 v1 candidateId 的正式决策，不会重复晋升", async () => {
+  const receipt = {
+    schemaVersion: "public-decision-receipt/v1",
+    receiptId: "receipt_decision_legacy",
+    saved: true,
+    decision: {
+      decisionId: "decision_legacy",
+      candidateId: "candidate_legacy",
+      importance: "related",
+      ownership: null,
+      decidedAt: iso(0),
+      ripple: { workEventCreated: false, workThreadChanged: false, currentStateChanged: false },
+    },
+    ripple: { workEventCreated: false, workThreadChanged: false, currentStateChanged: false },
+  };
+  const records = new Map([["workspace", {
+    analysis: {
+      candidates: [{
+        candidateId: "candidate_v2",
+        legacyCandidateId: "candidate_legacy",
+        eventType: "决策变化",
+        latestChange: "已有决策。",
+        background: "最少必要背景。",
+        userDecision: "是否重复决策？",
+        latestOccurredAt: iso(0),
+        evidence: [],
+      }],
+      ownershipDrafts: [],
+    },
+    decisions: [receipt.decision],
+    decisionReceipts: [receipt],
+    workThreads: [],
+    workEvents: [],
+    currentStates: [],
+  }]]);
+  const store = {
+    async read(key) { return structuredClone(records.get(key)); },
+    async write(key, value) { records.set(key, structuredClone(value)); },
+  };
+  const runtime = createLocalTrialRuntime({
+    config: { ready: true, wps: {} },
+    store,
+    oauth: {},
+    inference: { async analyze() { return {}; } },
+    now: () => new Date(iso(30)),
+  });
+  assert.deepEqual(
+    await runtime.saveImportance({ candidateId: "candidate_v2", importance: "related" }),
+    receipt,
+  );
+  const readback = await runtime.readWorkspace();
+  assert.equal(readback.decisions.length, 1);
+  assert.equal(readback.decisionReceipts.length, 1);
+  await assert.rejects(
+    runtime.saveImportance({ candidateId: "candidate_v2", importance: "uncertain" }),
+    /纠错、撤销或恢复尚未开放/u,
+  );
+});
+
+test("旧 v1 决策分叉成多个 eventType 时不冒充任一新候选已确认", async () => {
+  const legacyDecision = {
+    decisionId: "decision_legacy_ambiguous",
+    candidateId: "candidate_shared_legacy",
+    importance: "related",
+    ownership: null,
+    decidedAt: iso(0),
+    ripple: { workEventCreated: false, workThreadChanged: false, currentStateChanged: false },
+  };
+  const records = new Map([["workspace", {
+    analysis: {
+      candidates: ["进展／完成变化", "阻塞／风险变化"].map((eventType, index) => ({
+        candidateId: `candidate_split_${index}`,
+        legacyCandidateId: "candidate_shared_legacy",
+        eventType,
+        latestChange: `${eventType}待判断。`,
+        background: "最少必要背景。",
+        userDecision: "是否继续？",
+        latestOccurredAt: iso(index),
+        evidence: [],
+      })),
+      ownershipDrafts: [],
+    },
+    decisions: [legacyDecision],
+    decisionReceipts: [],
+    workThreads: [],
+    workEvents: [],
+    currentStates: [],
+  }]]);
+  const store = {
+    async read(key) { return structuredClone(records.get(key)); },
+    async write(key, value) { records.set(key, structuredClone(value)); },
+  };
+  const runtime = createLocalTrialRuntime({
+    config: { ready: true, wps: {} },
+    store,
+    oauth: {},
+    inference: { async analyze() { return {}; } },
+    now: () => new Date(iso(30)),
+  });
+  assert.equal((await runtime.status()).pendingDecisions, 2);
+  const receipt = await runtime.saveImportance({ candidateId: "candidate_split_1", importance: "related" });
+  assert.notEqual(receipt.decision.decisionId, legacyDecision.decisionId);
+  const readback = await runtime.readWorkspace();
+  assert.equal(readback.decisions.length, 2);
+  assert.equal((await runtime.status()).pendingDecisions, 1);
+  await assert.rejects(
+    runtime.saveImportance({ candidateId: "candidate_shared_legacy", importance: "related" }),
+    /旧候选标识对应多个变化类型/u,
   );
 });
 

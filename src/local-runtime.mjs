@@ -5,6 +5,28 @@ import { buildSourceEvidence, createBcCandidatePipeline } from "./public-signal-
 import { createLocalReportService } from "./report-to-issue.mjs";
 import { randomUUID } from "node:crypto";
 
+const fallbackMutationTails = new WeakMap();
+const FORMAL_EVENT_TYPES = new Set([
+  "决策变化",
+  "责任归属变化",
+  "下一步变化",
+  "进展／完成变化",
+  "阻塞／风险变化",
+  "时间点／截止期限变化",
+]);
+
+function serializeStoreMutation(store, operation) {
+  if (typeof store.serialize === "function") return store.serialize(operation);
+  const previous = fallbackMutationTails.get(store) || Promise.resolve();
+  const result = previous.then(operation, operation);
+  const settled = result.then(() => undefined, () => undefined);
+  fallbackMutationTails.set(store, settled);
+  settled.finally(() => {
+    if (fallbackMutationTails.get(store) === settled) fallbackMutationTails.delete(store);
+  });
+  return result;
+}
+
 export function createLocalTrialRuntime({
   config,
   store,
@@ -16,7 +38,6 @@ export function createLocalTrialRuntime({
 }) {
   let authorizationState;
   let selectableChats = new Map();
-  let mutationTail = Promise.resolve();
   const oauthPort = oauth || {
     buildAuthorization: () => buildWpsAuthorizationUrl({
       appId: config.wps.appId,
@@ -58,25 +79,42 @@ export function createLocalTrialRuntime({
     return value;
   }
 
+  function candidateMatchesId(candidate, candidateId, candidates) {
+    if (candidate?.candidateId === candidateId) return true;
+    if (!candidate?.legacyCandidateId || candidate.legacyCandidateId !== candidateId) return false;
+    return candidates.filter((item) => item.legacyCandidateId === candidateId).length === 1;
+  }
+
   function analysisCandidate(workspace, candidateId) {
-    const candidate = workspace?.analysis?.candidates?.find((item) => item.candidateId === candidateId);
-    if (!candidate) throw new Error("候选不存在");
-    return candidate;
+    const candidates = workspace?.analysis?.candidates || [];
+    const exact = candidates.find((item) => item.candidateId === candidateId);
+    if (exact) return exact;
+    const legacyMatches = candidates.filter((item) => item.legacyCandidateId === candidateId);
+    if (legacyMatches.length > 1) throw new Error("旧候选标识对应多个变化类型；请重新选择候选");
+    if (legacyMatches.length === 0) throw new Error("候选不存在");
+    return legacyMatches[0];
   }
 
   function serializeMutation(operation) {
-    const result = mutationTail.then(operation, operation);
-    mutationTail = result.then(() => undefined, () => undefined);
-    return result;
+    return serializeStoreMutation(store, operation);
   }
 
   function formalDecisions(workspace) {
     return workspace?.decisions || workspace?.analysis?.decisions || [];
   }
 
+  function analysisWithoutFormalState(analysis) {
+    if (!analysis) return null;
+    const { decisions: _legacyDecisions, ...rest } = analysis;
+    return rest;
+  }
+
+  function decisionTargetsCandidate(workspace, decision, candidate) {
+    return candidateMatchesId(candidate, decision?.candidateId, workspace?.analysis?.candidates || []);
+  }
+
   function sameOwnership(left, right) {
     const comparable = (value) => value === null || value === undefined ? null : {
-      candidateId: value.candidateId,
       kind: value.kind,
       threadId: value.threadId ?? null,
       threadTitle: value.threadTitle ?? null,
@@ -124,6 +162,7 @@ export function createLocalTrialRuntime({
     async status() {
       const credential = await store.read("credentials");
       const workspace = await store.read("workspace");
+      const decisions = formalDecisions(workspace);
       return {
         configured: config.ready,
         wpsAuthorized: Boolean(credential?.accessToken),
@@ -131,7 +170,7 @@ export function createLocalTrialRuntime({
         importComplete: workspace?.sources?.every((source) => source.completeness?.complete) ?? false,
         analyzedAt: workspace?.analysis?.generatedAt || null,
         pendingDecisions: workspace?.analysis?.candidates?.filter((candidate) => (
-          !(workspace?.analysis?.decisions || []).some((decision) => decision.candidateId === candidate.candidateId)
+          !decisions.some((decision) => decisionTargetsCandidate(workspace, decision, candidate))
         )).length || 0,
       };
     },
@@ -221,7 +260,7 @@ export function createLocalTrialRuntime({
           workThreads: previous.workThreads || [],
           workEvents: previous.workEvents || [],
           currentStates: previous.currentStates || [],
-          analysis: previous.analysis ? { ...previous.analysis, decisions } : null,
+          analysis: analysisWithoutFormalState(previous.analysis),
         });
         return {
           messageCount: messages.length,
@@ -243,8 +282,18 @@ export function createLocalTrialRuntime({
         });
         const result = await pipeline.run(workspace.evidence);
         const previous = workspace.analysis || {};
-        const candidateIds = new Set(result.candidates.map((candidate) => candidate.candidateId));
         const decisions = formalDecisions(workspace);
+        const ownershipDrafts = [];
+        for (const draft of previous.ownershipDrafts || []) {
+          const matches = result.candidates.filter((candidate) => (
+            candidateMatchesId(candidate, draft.candidateId, result.candidates)
+          ));
+          if (matches.length !== 1) continue;
+          const normalized = { ...draft, candidateId: matches[0].candidateId };
+          const index = ownershipDrafts.findIndex((item) => item.candidateId === normalized.candidateId);
+          if (index >= 0) ownershipDrafts[index] = normalized;
+          else ownershipDrafts.push(normalized);
+        }
         const analysis = {
           schemaVersion: result.schemaVersion,
           extractorVersion: result.extractorVersion,
@@ -254,8 +303,7 @@ export function createLocalTrialRuntime({
           knownGaps: result.knownGaps,
           provenance: result.provenance,
           generatedAt: now().toISOString(),
-          ownershipDrafts: (previous.ownershipDrafts || []).filter((item) => candidateIds.has(item.candidateId)),
-          decisions,
+          ownershipDrafts,
         };
         await store.write("workspace", { ...workspace, analysis, decisions });
         return analysis;
@@ -268,8 +316,10 @@ export function createLocalTrialRuntime({
           throw new Error("工作归属参数无效");
         }
         const workspace = await store.read("workspace");
-        analysisCandidate(workspace, candidateId);
-        const existingDecision = formalDecisions(workspace).find((item) => item.candidateId === candidateId);
+        const candidate = analysisCandidate(workspace, candidateId);
+        const canonicalCandidateId = candidate.candidateId;
+        const candidates = workspace.analysis?.candidates || [];
+        const existingDecision = formalDecisions(workspace).find((item) => decisionTargetsCandidate(workspace, item, candidate));
         if (kind === "existing_work_thread" && !(workspace.workThreads || []).some((item) => item.threadId === threadId)) {
           throw new Error("现有工作主线不存在");
         }
@@ -277,7 +327,7 @@ export function createLocalTrialRuntime({
           throw new Error("新工作主线标题不能为空");
         }
         const ownershipDraft = {
-          candidateId,
+          candidateId: canonicalCandidateId,
           kind,
           threadId: kind === "existing_work_thread" ? threadId : null,
           threadTitle: kind === "new_work_thread" ? threadTitle.trim().slice(0, 120) : null,
@@ -290,13 +340,15 @@ export function createLocalTrialRuntime({
           throw new Error("纠错、撤销或恢复尚未开放；已确认判断不能隐式重判");
         }
         const existingDraft = (workspace.analysis.ownershipDrafts || []).find((item) => (
-          item.candidateId === candidateId
+          candidateMatchesId(candidate, item.candidateId, candidates)
         ));
         if (existingDraft && sameOwnership(existingDraft, ownershipDraft)) {
           return { saved: true, ownership: existingDraft };
         }
         workspace.analysis.ownershipDrafts = [
-          ...(workspace.analysis.ownershipDrafts || []).filter((item) => item.candidateId !== candidateId),
+          ...(workspace.analysis.ownershipDrafts || []).filter((item) => (
+            !candidateMatchesId(candidate, item.candidateId, candidates)
+          )),
           ownershipDraft,
         ];
         await store.write("workspace", workspace);
@@ -310,12 +362,16 @@ export function createLocalTrialRuntime({
         if (!allowed.has(importance)) throw new Error("重要性参数无效");
         const workspace = await store.read("workspace");
         const candidate = analysisCandidate(workspace, candidateId);
-        const ownership = (workspace.analysis.ownershipDrafts || []).find((item) => item.candidateId === candidateId);
+        const canonicalCandidateId = candidate.candidateId;
+        const candidates = workspace.analysis?.candidates || [];
+        const ownership = (workspace.analysis.ownershipDrafts || []).find((item) => (
+          candidateMatchesId(candidate, item.candidateId, candidates)
+        ));
         if (importance === "current_important" && !["existing_work_thread", "new_work_thread"].includes(ownership?.kind)) {
           throw new Error("请先确认工作归属，再判断为当前重要");
         }
         const decisions = formalDecisions(workspace);
-        const existing = decisions.find((item) => item.candidateId === candidateId);
+        const existing = decisions.find((item) => decisionTargetsCandidate(workspace, item, candidate));
         if (existing?.importance === importance && sameOwnership(existing.ownership, ownership)) {
           return decisionReceipt(workspace, existing);
         }
@@ -326,6 +382,9 @@ export function createLocalTrialRuntime({
         const decisionId = `decision_${randomUUID()}`;
         const ripple = { workEventCreated: false, workThreadChanged: false, currentStateChanged: false };
         if (importance === "current_important") {
+          if (!FORMAL_EVENT_TYPES.has(candidate.eventType)) {
+            throw new Error("候选变化类型未绑定冻结枚举；未写入正式 WorkEvent");
+          }
           let threadId = ownership.threadId;
           if (ownership.kind === "new_work_thread") {
             threadId = `workthread_${randomUUID()}`;
@@ -337,9 +396,9 @@ export function createLocalTrialRuntime({
           }
           const workEvent = {
             workEventId: `workevent_${randomUUID()}`,
-            candidateId,
+            candidateId: canonicalCandidateId,
             threadId,
-            eventType: "user_confirmed_change",
+            eventType: candidate.eventType,
             businessStatement: candidate.latestChange,
             occurredAt: candidate.latestOccurredAt,
             evidenceSnapshot: candidate.evidence.map((item) => ({
@@ -350,7 +409,9 @@ export function createLocalTrialRuntime({
             createdByDecisionId: decisionId,
           };
           workspace.workEvents = [
-            ...(workspace.workEvents || []).filter((item) => item.candidateId !== candidateId),
+            ...(workspace.workEvents || []).filter((item) => (
+              !candidateMatchesId(candidate, item.candidateId, candidates)
+            )),
             workEvent,
           ];
           workspace.currentStates = [
@@ -370,7 +431,7 @@ export function createLocalTrialRuntime({
         }
         const decision = {
           decisionId,
-          candidateId,
+          candidateId: canonicalCandidateId,
           importance,
           ownership: ownership ?? null,
           decidedAt,
@@ -378,7 +439,6 @@ export function createLocalTrialRuntime({
         };
         const receipt = decisionReceipt(workspace, decision);
         workspace.decisions = [...decisions, decision];
-        workspace.analysis.decisions = workspace.decisions;
         workspace.decisionReceipts = [...(workspace.decisionReceipts || []), receipt];
         await store.write("workspace", workspace);
         return receipt;
@@ -392,8 +452,9 @@ export function createLocalTrialRuntime({
         chatIds: workspace.chatIds,
         messageCount: workspace.messages?.length || 0,
         sources: workspace.sources || [],
-        analysis: workspace.analysis || null,
+        analysis: analysisWithoutFormalState(workspace.analysis),
         decisions: formalDecisions(workspace),
+        decisionReceipts: workspace.decisionReceipts || [],
         workThreads: workspace.workThreads || [],
         workEvents: workspace.workEvents || [],
         currentStates: workspace.currentStates || [],

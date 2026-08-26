@@ -2,6 +2,20 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+const mutationTails = new Map();
+
+function serializeForRoot(root, operation) {
+  const key = path.resolve(root);
+  const previous = mutationTails.get(key) || Promise.resolve();
+  const result = previous.then(operation, operation);
+  const settled = result.then(() => undefined, () => undefined);
+  mutationTails.set(key, settled);
+  settled.finally(() => {
+    if (mutationTails.get(key) === settled) mutationTails.delete(key);
+  });
+  return result;
+}
+
 async function readOrCreateKey(root) {
   const file = path.join(root, "local.key");
   try {
@@ -50,6 +64,10 @@ export async function createEncryptedLocalStore({ root }) {
     return path.join(root, `${name}.enc.json`);
   };
   return Object.freeze({
+    serialize(operation) {
+      if (typeof operation !== "function") throw new TypeError("serialized operation is required");
+      return serializeForRoot(root, operation);
+    },
     async read(name) {
       try {
         return openSealed(key, JSON.parse(await readFile(recordFile(name), "utf8")));

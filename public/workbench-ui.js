@@ -49,12 +49,19 @@ function renderRoute() {
   requestAnimationFrame(() => byId(active)?.scrollIntoView({ block: "start" }));
 }
 
-function decisionFor(candidateId) {
-  return (currentWorkspace?.analysis?.decisions || []).find((item) => item.candidateId === candidateId);
+function candidateMatchesId(candidate, candidateId) {
+  if (candidate?.candidateId === candidateId) return true;
+  if (!candidate?.legacyCandidateId || candidate.legacyCandidateId !== candidateId) return false;
+  return (currentWorkspace?.analysis?.candidates || [])
+    .filter((item) => item.legacyCandidateId === candidateId).length === 1;
 }
 
-function ownershipFor(candidateId) {
-  return (currentWorkspace?.analysis?.ownershipDrafts || []).find((item) => item.candidateId === candidateId);
+function decisionFor(candidate) {
+  return (currentWorkspace?.decisions || []).find((item) => candidateMatchesId(candidate, item.candidateId));
+}
+
+function ownershipFor(candidate) {
+  return (currentWorkspace?.analysis?.ownershipDrafts || []).find((item) => candidateMatchesId(candidate, item.candidateId));
 }
 
 function renderEvidence(evidence) {
@@ -68,8 +75,8 @@ function renderEvidence(evidence) {
 }
 
 function candidateCard(candidate) {
-  const decision = decisionFor(candidate.candidateId);
-  const ownership = ownershipFor(candidate.candidateId);
+  const decision = decisionFor(candidate);
+  const ownership = ownershipFor(candidate);
   const threadChoices = (currentWorkspace.workThreads || []).map((thread) => (
     "<label class=\"choice\"><input type=\"radio\" name=\"ownership-" + candidate.candidateId
     + "\" value=\"existing_work_thread\" data-thread-id=\"" + escapeHtml(thread.threadId) + "\""
@@ -108,8 +115,8 @@ function candidateCard(candidate) {
 
 function sortedCandidates() {
   return [...(currentWorkspace?.analysis?.candidates || [])].sort((left, right) => {
-    const leftResolved = decisionFor(left.candidateId) ? 1 : 0;
-    const rightResolved = decisionFor(right.candidateId) ? 1 : 0;
+    const leftResolved = decisionFor(left) ? 1 : 0;
+    const rightResolved = decisionFor(right) ? 1 : 0;
     return leftResolved - rightResolved
       || right.latestOccurredAt.localeCompare(left.latestOccurredAt)
       || left.candidateId.localeCompare(right.candidateId);
@@ -120,7 +127,7 @@ function renderHistory() {
   const threads = new Map((currentWorkspace?.workThreads || []).map((item) => [item.threadId, item]));
   const states = new Map((currentWorkspace?.currentStates || []).map((item) => [item.sourceWorkEventId, item]));
   const events = [...(currentWorkspace?.workEvents || [])]
-    .filter((event) => event?.eventType === "user_confirmed_change" && states.has(event.workEventId))
+    .filter((event) => states.has(event.workEventId))
     .toSorted((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)));
   byId("historyList").innerHTML = events.length
     ? events.map((event) => {
@@ -138,7 +145,7 @@ function renderHistory() {
 
 function renderWorkspace() {
   const candidates = sortedCandidates();
-  const pending = candidates.filter((item) => !decisionFor(item.candidateId)).length;
+  const pending = candidates.filter((item) => !decisionFor(item)).length;
   byId("decisionCount").textContent = String(pending);
   byId("homeDecisionSummary").textContent = pending ? pending + " 项需要确认" : "没有待判断事项";
   byId("homeSourceSummary").textContent = (currentWorkspace?.sources || []).length
