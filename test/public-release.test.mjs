@@ -301,13 +301,13 @@ test("首次设置不默认绑定任何模型服务商、地址或模型名称",
   assert.match(example, /^LLM_BASE_URL=$/mu);
 });
 
-test("公开工作台提供响应式决策、来源、关系和设置拓扑", async () => {
+test("公开工作台提供响应式决策、历史、来源、关系和设置拓扑", async () => {
   const [page, ui] = await Promise.all([
     readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
     readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
   ]);
-  for (const target of ["#home", "#decisions", "#sources", "#relationships", "#settings", "#report"]) assert.match(page, new RegExp(target));
-  for (const sectionId of ["id=\"decisions\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\"", "id=\"report\""]) assert.match(page, new RegExp(sectionId));
+  for (const target of ["#home", "#decisions", "#history", "#sources", "#relationships", "#settings", "#report"]) assert.match(page, new RegExp(target));
+  for (const sectionId of ["id=\"decisions\"", "id=\"history\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\"", "id=\"report\""]) assert.match(page, new RegExp(sectionId));
   assert.match(page, /workspace-header/u);
   assert.match(page, /@media\(max-width:900px\)/u);
   assert.match(page, /@media\(max-width:390px\)/u);
@@ -318,6 +318,22 @@ test("公开工作台提供响应式决策、来源、关系和设置拓扑", as
   assert.match(ui, /\/api\/decisions\/ownership/u);
   assert.match(ui, /\/api\/decisions\/importance/u);
   assert.match(ui, /candidate\.background/u);
+  assert.match(ui, /history: \["history"\]/u);
+  assert.match(ui, /renderHistory/u);
+  assert.match(page, /本机确认记录/u);
+});
+
+test("公开工作台深链接预留粘性页头空间，菜单收起同步辅助状态", async () => {
+  const [page, ui] = await Promise.all([
+    readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
+    readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
+  ]);
+
+  assert.match(page, /html\{scroll-padding-top:148px\}/u);
+  assert.match(page, /\.grid section\[id\]\{scroll-margin-top:148px\}/u);
+  assert.match(ui, /scrollIntoView\(\{ block: "start" \}\)/u);
+  assert.match(ui, /function closeMobileNavigation\(\)[\s\S]*?aria-expanded", "false"/u);
+  assert.match(ui, /location\.hash = link\.dataset\.routeLink;\s*closeMobileNavigation\(\);/u);
 });
 
 test("工作台导航位于粘性页头之上，且页头背景不拦截路由点击", async () => {

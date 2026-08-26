@@ -19,6 +19,7 @@ const post = (url, body) => request(url, {
 const routePanels = {
   home: ["home"],
   decisions: ["analysisPanel", "decisions"],
+  history: ["history"],
   sources: ["sources", "sourceImport"],
   relationships: ["relationships"],
   settings: ["settings"],
@@ -45,6 +46,7 @@ function renderRoute() {
   document.querySelectorAll("[data-route-link]").forEach((link) => {
     link.setAttribute("aria-current", link.dataset.routeLink === active ? "page" : "false");
   });
+  requestAnimationFrame(() => byId(active)?.scrollIntoView({ block: "start" }));
 }
 
 function decisionFor(candidateId) {
@@ -114,6 +116,26 @@ function sortedCandidates() {
   });
 }
 
+function renderHistory() {
+  const threads = new Map((currentWorkspace?.workThreads || []).map((item) => [item.threadId, item]));
+  const states = new Map((currentWorkspace?.currentStates || []).map((item) => [item.sourceWorkEventId, item]));
+  const events = [...(currentWorkspace?.workEvents || [])]
+    .filter((event) => event?.eventType === "user_confirmed_change" && states.has(event.workEventId))
+    .toSorted((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)));
+  byId("historyList").innerHTML = events.length
+    ? events.map((event) => {
+      const thread = threads.get(event.threadId);
+      const state = states.get(event.workEventId);
+      return "<article class=\"history-card\"><div class=\"candidate-meta\"><span class=\"pill ok\">已确认</span><span class=\"pill\">"
+        + escapeHtml(event.occurredAt) + "</span><span class=\"pill\">Current State r"
+        + escapeHtml(state.revision) + "</span></div><h3>" + escapeHtml(thread?.title || "已确认工作")
+        + "</h3><p class=\"latest\">" + escapeHtml(event.businessStatement) + "</p><p><b>当前状态：</b>"
+        + escapeHtml(state.latestChange) + "</p><p><b>下一步：</b>" + escapeHtml(state.nextAction)
+        + "</p><p><small>本机确认写入：" + escapeHtml(state.updatedAt) + "</small></p></article>";
+    }).join("")
+    : "<div class=\"empty\">还没有可回顾的本机确认记录。完成“工作归属 → 重要性”确认后，真实变化会显示在这里。</div>";
+}
+
 function renderWorkspace() {
   const candidates = sortedCandidates();
   const pending = candidates.filter((item) => !decisionFor(item.candidateId)).length;
@@ -133,6 +155,7 @@ function renderWorkspace() {
       + "</p><p><b>下一步：</b>" + escapeHtml(state.nextAction) + "</p><small>更新时间：" + escapeHtml(state.updatedAt) + "</small></article>"
     )).join("")
     : "<div class=\"empty\">还没有经你确认的工作变化。</div>";
+  renderHistory();
   document.querySelectorAll("[data-save-ownership]").forEach((button) => { button.onclick = saveOwnership; });
   document.querySelectorAll("[data-save-importance]").forEach((button) => { button.onclick = saveImportance; });
 }
@@ -184,11 +207,15 @@ byId("navToggle").onclick = () => {
   navigation.classList.toggle("open");
   byId("navToggle").setAttribute("aria-expanded", String(navigation.classList.contains("open")));
 };
+function closeMobileNavigation() {
+  byId("workbenchNav").classList.remove("open");
+  byId("navToggle").setAttribute("aria-expanded", "false");
+}
 document.querySelectorAll(".workbench-nav a").forEach((link) => {
   link.onclick = (event) => {
     event.preventDefault();
     location.hash = link.dataset.routeLink;
-    byId("workbenchNav").classList.remove("open");
+    closeMobileNavigation();
   };
 });
 byId("authorize").onclick = async () => {

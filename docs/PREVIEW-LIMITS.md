@@ -12,6 +12,7 @@
 - 未决优先、时间倒序的业务化候选卡；
 - 工作归属后再判断重要性的 staged decision；
 - 用户确认当前重要后，单次写入 WorkEvent、WorkThread 与 Current State；
+- 历史回顾仅显示安装者本机已确认并写入 WorkEvent／WorkThread／Current State 的变化；无确认记录时显示空态，不内置业务样例；
 - Report 本地草稿、扫描、完整预览和本地确认回执；
 - 当前文件、完整 Git 历史、二进制／大小、私人 denylist 与干净安装门禁。
 
