@@ -658,6 +658,29 @@ test("本地写操作拒绝跨站或非 JSON 请求，不能被网页静默触�
   }
 });
 
+test("本地工作台 favicon 请求返回空成功响应，不产生浏览器 404", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-favicon-"));
+  const indexFile = path.join(root, "index.html");
+  await writeFile(indexFile, "<!doctype html><title>local</title>", "utf8");
+  const server = createLocalHttpServer({
+    indexFile,
+    runtime: {
+      async status() { return {}; },
+      async readWorkspace() { return {}; },
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get("cache-control"), "public, max-age=86400");
+    assert.equal(await response.text(), "");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("Report HTTP 只暴露本地草稿、回读和确认 seam，不包含 GitHub 提交路由", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-report-disabled-"));
   const indexFile = path.join(root, "index.html");

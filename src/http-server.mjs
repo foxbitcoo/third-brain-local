@@ -45,6 +45,11 @@ export function createLocalHttpServer({ runtime, indexFile }) {
     try {
       assertLoopbackHost(request);
       const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/favicon.ico") {
+        response.writeHead(204, { "cache-control": "public, max-age=86400" });
+        response.end();
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/") {
         const html = await readFile(indexPath, "utf8");
         response.writeHead(200, {
