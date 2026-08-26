@@ -28,7 +28,14 @@ function normalizeChat(item) {
   const type = String(chat?.type || "unknown");
   const privateChat = /(?:p2p|private|direct|single|one[_-]?to[_-]?one)/iu.test(type);
   const groupChat = /group/iu.test(type);
-  return { id: chat?.id || "", name: chat?.name || "未命名会话", type, privateChat, groupChat };
+  return {
+    id: chat?.id || "",
+    name: chat?.name || "未命名会话",
+    type,
+    privateChat,
+    groupChat,
+    conversationKind: privateChat ? "direct" : groupChat ? "group" : "unsupported",
+  };
 }
 
 function normalizeMessage(item) {
@@ -36,7 +43,8 @@ function normalizeMessage(item) {
   const content = message?.content?.text?.content ?? message?.content?.text ?? message?.text ?? "";
   return {
     id: message?.id || "",
-    senderName: message?.sender?.name || message?.sender?.id || "未知成员",
+    senderRef: message?.sender?.id || null,
+    senderName: message?.sender?.name || "未知成员",
     occurredAt: message?.ctime || message?.create_time || "",
     text: typeof content === "string" ? content : "",
   };

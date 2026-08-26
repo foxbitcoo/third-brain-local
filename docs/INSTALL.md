@@ -3,21 +3,18 @@
 ## 1. 本机准备
 
 - Node.js 20 或更高；
-- WPS 企业自建应用；
-- OpenAI-compatible 模型 API：服务商、完整 API 地址、模型名称／Endpoint ID 和 API Key。
+- 安装者自己的 WPS 企业自建应用；
+- 安装者自己的 OpenAI-compatible 模型 API；
+- 可选：只存于本机的 Report 私人 denylist，一行一个禁止公开的字面量。
 
 ```bash
 npm install
 npm start
 ```
 
-首次启动会在终端显示 `http://127.0.0.1:4310`。用浏览器打开该地址后进入网页设置导览，依次说明 WPS 应用、权限、回调地址和模型配置。配置会通过本地页面写入权限为 600 的 `.env.local`；页面不会再把密钥读出来。
+首次启动会显示 `http://127.0.0.1:4310`。网页导览会说明 WPS 应用、权限、OAuth 回调和模型配置。配置保存到权限为 600 的 `.env.local`，页面不会回显密钥。保存后停止并重新运行 `npm start`。
 
-保存后，在终端按 Control + C 停止服务，再次运行 `npm start` 进入 WPS 授权与群聊选择页面。
-
-如果希望手动配置，也可以运行 `npm run setup`。该命令只在本机创建权限为 600 的 `.env.local`，不会覆盖已有配置。
-
-## 2. 填写自己的配置
+## 2. 本地配置
 
 ```text
 WPS_APP_ID=
@@ -28,32 +25,31 @@ LLM_PROVIDER=
 LLM_BASE_URL=
 LLM_MODEL=
 LLM_API_KEY=
+REPORT_PRIVATE_DENYLIST_FILE=
 LOCAL_PORT=4310
 ```
 
-不要提交、截图或发送 `.env.local`。本项目不支持浏览器 `WPS_SID`。
+不要提交、截图或发送 `.env.local`、denylist 或 `.runtime/`。项目不支持浏览器 `WPS_SID`。
+
+`REPORT_PRIVATE_DENYLIST_FILE` 为空时，Report 草稿仍可生成并完整预览，但状态只能是 `manual_review_required`，不能生成确认回执。该文件只在启动时读取，不会打印或复制到仓库。
 
 ## 3. WPS 后台
 
-在应用安全配置中把用户授权回调地址设置为：
+回调地址：
 
 ```text
 http://127.0.0.1:4310/oauth/wps/callback
 ```
 
-分别搜索 `kso.user_base.read` 和 `kso.mcp_message.readwrite`，两项都选择 `user`，不要选择 `app`，也不要输入 `delegated:`。申请并发布后，当前用户重新授权。详见 [WPS 权限](WPS-PERMISSIONS.md)。
+分别搜索 `kso.user_base.read` 与 `kso.mcp_message.readwrite`，两项都选择 `user`。不要选择 `app`，不要输入 `delegated:`。权限审批并发布后，当前安装者重新 OAuth。
 
-## 4. 预检与启动
+## 4. 预检和真实验证
 
 ```bash
 npm run preflight
 npm start
 ```
 
-预检只检查字段和范围，不会联网证明审批、OAuth 或模型连接已经成功。启动后打开 `http://127.0.0.1:4310` 完成真实验证。
+预检只验证字段与范围，不证明审批、OAuth、消息、模型或业务价值已真实通过。启动后由安装者选择少量私聊／群聊，完成导入、B/C 分析、工作归属与重要性判断，再检查首页 Current State。
 
-如果只想先看无数据页面：
-
-```bash
-npm run demo
-```
+只查看无数据空状态可运行 `npm run demo`。

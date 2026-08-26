@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 async function readOrCreateKey(root) {
@@ -43,19 +43,35 @@ export async function createEncryptedLocalStore({ root }) {
   await chmod(root, 0o700);
   const key = await readOrCreateKey(root);
   if (key.length !== 32) throw new Error("invalid local encryption key");
+  const recordFile = (name) => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,119}$/u.test(String(name ?? ""))) {
+      throw new Error("invalid local record name");
+    }
+    return path.join(root, `${name}.enc.json`);
+  };
   return Object.freeze({
     async read(name) {
       try {
-        return openSealed(key, JSON.parse(await readFile(path.join(root, `${name}.enc.json`), "utf8")));
+        return openSealed(key, JSON.parse(await readFile(recordFile(name), "utf8")));
       } catch (error) {
         if (error?.code === "ENOENT") return undefined;
         throw error;
       }
     },
     async write(name, value) {
-      const file = path.join(root, `${name}.enc.json`);
-      await writeFile(file, `${JSON.stringify(seal(key, value))}\n`, { encoding: "utf8", mode: 0o600 });
-      await chmod(file, 0o600);
+      const file = recordFile(name);
+      const temporary = path.join(root, `.record-${randomBytes(12).toString("hex")}.tmp`);
+      try {
+        await writeFile(temporary, `${JSON.stringify(seal(key, value))}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+        await chmod(temporary, 0o600);
+        await rename(temporary, file);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     },
   });
 }

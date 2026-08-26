@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 
 import { createLocalConfig } from "../src/config.mjs";
 import { createOpenAiCompatibleAnalyzer } from "../src/openai-compatible.mjs";
@@ -21,10 +22,24 @@ if (!config.ready) {
   });
 } else {
   const store = await createEncryptedLocalStore({ root: path.resolve(".runtime", "user-data") });
+  const denylistPath = localEnvironment.REPORT_PRIVATE_DENYLIST_FILE
+    || process.env.REPORT_PRIVATE_DENYLIST_FILE;
+  let reportPrivateDenylist = [];
+  if (denylistPath) {
+    try {
+      reportPrivateDenylist = (await readFile(path.resolve(denylistPath), "utf8"))
+        .split(/\r?\n/u)
+        .map((item) => item.trim())
+        .filter((item) => item && !item.startsWith("#"));
+    } catch {
+      throw new Error("Report to Issue 私人 denylist 无法读取；已失败关闭");
+    }
+  }
   const runtime = createLocalTrialRuntime({
     config,
     store,
     inference: createOpenAiCompatibleAnalyzer(config.model),
+    reportPrivateDenylist,
   });
   server = createLocalHttpServer({ runtime, indexFile: new URL("../public/index.html", import.meta.url) });
 }

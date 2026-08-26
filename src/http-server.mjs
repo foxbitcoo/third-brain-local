@@ -39,12 +39,6 @@ function assertLoopbackHost(request) {
   }
 }
 
-function isDisabledReportRoute(pathname) {
-  return pathname === "/api/public-workbench/report-history"
-    || pathname === "/api/public-workbench/reports"
-    || pathname.startsWith("/api/public-workbench/reports/");
-}
-
 export function createLocalHttpServer({ runtime, indexFile }) {
   const indexPath = typeof indexFile === "string" ? indexFile : fileURLToPath(indexFile);
   return createServer(async (request, response) => {
@@ -75,8 +69,9 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       if (request.method === "GET" && url.pathname === "/api/status") return json(response, 200, await runtime.status());
       if (request.method === "GET" && url.pathname === "/api/workspace") return json(response, 200, await runtime.readWorkspace());
       if (request.method === "GET" && url.pathname === "/api/public-workbench") return json(response, 200, await runtime.readPublicWorkbench());
-      if (isDisabledReportRoute(url.pathname)) {
-        return json(response, 404, { error: "feature_not_available", feature: "report_to_issue" });
+      const reportMatch = url.pathname.match(/^\/api\/reports\/(draft_[A-Za-z0-9-]{8,80})$/u);
+      if (request.method === "GET" && reportMatch) {
+        return json(response, 200, await runtime.readReportDraft(reportMatch[1]));
       }
       if (request.method === "POST" && url.pathname === "/oauth/wps/start") {
         assertSameOriginJson(request);
@@ -99,7 +94,23 @@ export function createLocalHttpServer({ runtime, indexFile }) {
       }
       if (request.method === "POST" && url.pathname === "/api/judgments") {
         assertSameOriginJson(request);
-        return json(response, 200, await runtime.saveJudgment(await body(request)));
+        return json(response, 410, { error: "staged_decision_required" });
+      }
+      if (request.method === "POST" && url.pathname === "/api/decisions/ownership") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.saveOwnership(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/decisions/importance") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.saveImportance(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/reports") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.createReportDraft(await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/reports/confirm") {
+        assertSameOriginJson(request);
+        return json(response, 200, await runtime.confirmReportDraft(await body(request)));
       }
       if (request.method === "POST" && url.pathname === "/api/public-workbench/conflicts") {
         assertSameOriginJson(request);

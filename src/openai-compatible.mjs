@@ -12,14 +12,30 @@ export function createOpenAiCompatibleAnalyzer({
   fetchImpl = fetch,
 }) {
   return Object.freeze({
-    async analyze({ messages }) {
-      const compact = messages.slice(-300).map((message) => ({
-        evidenceId: message.id,
-        chat: message.chatName,
-        time: message.occurredAt,
-        sender: message.senderName,
-        text: message.text.slice(0, 1200),
-      }));
+    async analyze({ messages = null, strategy = null, units = null }) {
+      const compact = Array.isArray(units)
+        ? units.slice(-300).map((unit) => ({
+          unitId: unit.unitId,
+          evidence: unit.items.map((item) => ({
+            evidenceId: item.evidenceId,
+            source: item.display?.sourceName || "",
+            time: item.occurredAt,
+            sender: item.display?.senderName || "",
+            text: item.excerpt.slice(0, 1200),
+          })),
+        }))
+        : (messages || []).slice(-300).map((message) => ({
+          evidenceId: message.id,
+          source: message.chatName,
+          time: message.occurredAt,
+          sender: message.senderName,
+          text: message.text.slice(0, 1200),
+        }));
+      const strategyInstruction = strategy === "B"
+        ? "当前是策略 B：每个 unit 只有一条 Evidence，只在单条信息已经足够时提出候选；短确认语不能脱离上下文升级。"
+        : strategy === "C"
+          ? "当前是策略 C：每个 unit 是同一来源、90 分钟内最多 5 条连续 Evidence；利用连续对话补足对象，但不能跨 unit 猜测。"
+          : "当前是兼容分析模式。";
       const response = await fetchImpl(baseUrl, {
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
@@ -29,7 +45,7 @@ export function createOpenAiCompatibleAnalyzer({
           messages: [
             {
               role: "system",
-              content: "你是办公信号分析助手。只根据证据，用中文业务语言输出 JSON：summary 字符串；candidates 数组，每项含 title、reason、nextQuestion、evidenceIds（1至3个输入中真实存在的 evidenceId）。不要把普通聊天包装成项目，不确定就明确写不确定。只输出 JSON。",
+              content: `你是办公信号分析助手。${strategyInstruction}只根据输入 Evidence 输出 JSON：summary 字符串；candidates 数组，每项必须含 title、latestChange、background、uncertainty、userDecision、semanticKey、evidenceIds。evidenceIds 只能引用输入中真实存在的编号。标题只做简短业务总结；背景、最新变化、AI 不确定点和需要用户判断的事项必须分开。不要把普通聊天包装成工作，不确定就不生成候选。只输出 JSON。`,
             },
             { role: "user", content: JSON.stringify(compact) },
           ],
