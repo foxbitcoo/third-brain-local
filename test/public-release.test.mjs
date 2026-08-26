@@ -49,7 +49,7 @@ test("公开版明确是可安装产品版，并声明 AGPL-3.0 与个人版单�
   assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/u);
 });
 
-test("公开 Alpha 明确未提供 Report to Issue，并将后续工作留给独立 Ticket", async () => {
+test("公开 Alpha 只提供 Report to Issue 本地安全链路并明确 GitHub 写入 NOT_RUN", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const [readme, privacy, architecture, limits] = await Promise.all([
     readFile(path.join(root, "README.md"), "utf8"),
@@ -59,9 +59,10 @@ test("公开 Alpha 明确未提供 Report to Issue，并将后续工作留给独
   ]);
 
   for (const content of [readme, privacy, architecture, limits]) {
-    assert.match(content, /Report to Issue/u);
-    assert.match(content, /公开 Alpha.*(?:暂未提供|不提供)/u);
-    assert.match(content, /后续.*独立 Ticket/u);
+    assert.match(content, /Report to Issue|Report/u);
+    assert.match(content, /本地草稿/u);
+    assert.match(content, /NOT_RUN/u);
+    assert.match(content, /(?:没有|不执行|不会自动创建).*GitHub/su);
   }
 });
 
@@ -300,20 +301,39 @@ test("首次设置不默认绑定任何模型服务商、地址或模型名称",
   assert.match(example, /^LLM_BASE_URL=$/mu);
 });
 
-test("公开工作台提供响应式决策、来源、关系和设置拓扑", async () => {
+test("公开工作台提供响应式决策、历史、来源、关系和设置拓扑", async () => {
   const [page, ui] = await Promise.all([
     readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
     readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
   ]);
-  for (const target of ["#home", "#decisions", "#sources", "#relationships", "#settings"]) assert.match(page, new RegExp(target));
-  for (const sectionId of ["id=\"decisions\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\""]) assert.match(page, new RegExp(sectionId));
+  for (const target of ["#home", "#decisions", "#history", "#sources", "#relationships", "#settings", "#report"]) assert.match(page, new RegExp(target));
+  for (const sectionId of ["id=\"decisions\"", "id=\"history\"", "id=\"sources\"", "id=\"relationships\"", "id=\"settings\"", "id=\"report\""]) assert.match(page, new RegExp(sectionId));
   assert.match(page, /workspace-header/u);
   assert.match(page, /@media\(max-width:900px\)/u);
   assert.match(page, /@media\(max-width:390px\)/u);
   assert.match(page, /width:288px/u);
   assert.match(page, /navToggle/u);
   assert.match(page, /history\.back\(\)/u);
-  assert.match(ui, /candidate\.conflictingClaims/u);
+  assert.match(ui, /sortedCandidates/u);
+  assert.match(ui, /\/api\/decisions\/ownership/u);
+  assert.match(ui, /\/api\/decisions\/importance/u);
+  assert.match(ui, /candidate\.background/u);
+  assert.match(ui, /history: \["history"\]/u);
+  assert.match(ui, /renderHistory/u);
+  assert.match(page, /本机确认记录/u);
+});
+
+test("公开工作台深链接预留粘性页头空间，菜单收起同步辅助状态", async () => {
+  const [page, ui] = await Promise.all([
+    readFile(path.resolve(import.meta.dirname, "..", "public", "index.html"), "utf8"),
+    readFile(path.resolve(import.meta.dirname, "..", "public", "workbench-ui.js"), "utf8"),
+  ]);
+
+  assert.match(page, /html\{scroll-padding-top:148px\}/u);
+  assert.match(page, /\.grid section\[id\]\{scroll-margin-top:148px\}/u);
+  assert.match(ui, /scrollIntoView\(\{ block: "start" \}\)/u);
+  assert.match(ui, /function closeMobileNavigation\(\)[\s\S]*?aria-expanded", "false"/u);
+  assert.match(ui, /location\.hash = link\.dataset\.routeLink;\s*closeMobileNavigation\(\);/u);
 });
 
 test("工作台导航位于粘性页头之上，且页头背景不拦截路由点击", async () => {
@@ -325,126 +345,27 @@ test("工作台导航位于粘性页头之上，且页头背景不拦截路由�
   assert.match(page, /\.workbench-nav\.open\{[^}]*position:fixed[^}]*z-index:21/u);
 });
 
-function mutateCandidate(candidateIndex, mutate) {
-  const candidates = structuredClone(SYNTHETIC_CANDIDATES);
-  mutate(candidates[candidateIndex]);
-  return candidates;
-}
-
-test("公开 7/7 manifest 使用独立冻结的 manifest 与集合 digest", () => {
-  assert.equal(
-    PUBLIC_CANDIDATE_MANIFEST.manifestDigest,
-    "35e02f1881c657266b1adc000577d7b54fac00c73df864847ffef3725ed396b4",
-  );
-  assert.equal(
-    PUBLIC_CANDIDATE_MANIFEST.setDigest,
-    "e6a97eaf624d70ac907fd7478ebd2de460539a027bbbd0f30393584531afd88b",
-  );
-  assert.equal(PUBLIC_CANDIDATE_MANIFEST.candidates.length, 7);
-  assert.equal(Object.isFrozen(PUBLIC_CANDIDATE_MANIFEST), true);
-  assert.equal(Object.isFrozen(PUBLIC_CANDIDATE_MANIFEST.candidates[0]), true);
-});
-
-test("冻结 manifest 拒绝每个候选的逐字段业务篡改", () => {
-  const scalarFields = [
-    "id",
-    "title",
-    "businessChange",
-    "rule",
-    "question",
-    "sourceLabel",
-    "participantLabel",
-    "eventType",
-    "occurredAt",
-    "minimumEvidence",
-    "recommendation",
-  ];
-  for (const field of scalarFields) {
-    const candidates = mutateCandidate(0, (candidate) => {
-      candidate[field] = `${candidate[field]}-tampered`;
-    });
-    assert.equal(validateCandidateSet(candidates).accepted, false, field);
-  }
-
-  for (const [claimIndex, field] of [[0, "statement"], [0, "sourceLabel"], [1, "statement"], [1, "sourceLabel"]]) {
-    const candidates = mutateCandidate(5, (candidate) => {
-      candidate.conflictingClaims[claimIndex][field] += "-tampered";
-    });
-    assert.equal(validateCandidateSet(candidates).accepted, false, `conflictingClaims[${claimIndex}].${field}`);
-  }
-  assert.equal(validateCandidateSet(mutateCandidate(0, (candidate) => {
-    candidate.unexpectedBusinessField = "tampered";
-  })).accepted, false);
-});
-
-test("冻结 manifest 拒绝候选顺序、重复与缺失", () => {
-  assert.deepEqual(validateCandidateSet(), { accepted: true, reason: "synthetic_7_of_7" });
-  assert.equal(validateCandidateSet(SYNTHETIC_CANDIDATES.slice(0, 6)).accepted, false);
-  assert.equal(validateCandidateSet([...SYNTHETIC_CANDIDATES.slice(0, 6), SYNTHETIC_CANDIDATES[0]]).accepted, false);
-  assert.equal(validateCandidateSet([
-    SYNTHETIC_CANDIDATES[1],
-    SYNTHETIC_CANDIDATES[0],
-    ...SYNTHETIC_CANDIDATES.slice(2),
-  ]).accepted, false);
-});
-
-test("冻结 manifest 拒绝最小证据、证据集合与冲突证据篡改", () => {
-  for (const field of ["id", "revision", "fingerprint"]) {
-    const candidates = mutateCandidate(3, (candidate) => {
-      candidate.evidence[field] = field === "fingerprint"
-        ? "a".repeat(64)
-        : `${candidate.evidence[field]}-tampered`;
-    });
-    assert.equal(validateCandidateSet(candidates).accepted, false, `evidence.${field}`);
-  }
-  assert.equal(validateCandidateSet(mutateCandidate(3, (candidate) => {
-    delete candidate.evidence.revision;
-  })).accepted, false);
-  assert.equal(validateCandidateSet(mutateCandidate(3, (candidate) => {
-    candidate.evidence.unexpectedEvidenceField = "tampered";
-  })).accepted, false);
-  assert.equal(validateCandidateSet(mutateCandidate(5, (candidate) => {
-    candidate.conflictingClaims.reverse();
-  })).accepted, false);
-  assert.equal(validateCandidateSet(mutateCandidate(5, (candidate) => {
-    candidate.conflictingClaims[0].unexpectedClaimField = "tampered";
-  })).accepted, false);
-});
-
-test("公开合成工作台要求三字段冲突裁决，且不暴露 Report 生命周期状态", async () => {
+test("公开版不打包人物、项目、群聊或业务候选 fixture", async () => {
+  assert.equal(PUBLIC_CANDIDATE_MANIFEST.policy, "no_bundled_business_fixtures");
+  assert.equal(PUBLIC_CANDIDATE_MANIFEST.candidates.length, 0);
+  assert.equal(SYNTHETIC_CANDIDATES.length, 0);
+  assert.deepEqual(validateCandidateSet(), { accepted: true, reason: "installer_data_required" });
+  assert.equal(validateCandidateSet([{ title: "bundled example" }]).accepted, false);
   const data = new Map();
   const store = {
     async read(key) { return data.get(key); },
     async write(key, value) { data.set(key, structuredClone(value)); },
   };
-  const workbench = createPublicCandidateWorkbench({
-    store,
-    now: () => new Date("2026-08-24T00:00:00.000Z"),
-  });
+  const workbench = createPublicCandidateWorkbench({ store });
   const initial = await workbench.read();
-  assert.equal(initial.candidates.length, 7);
-  assert.equal(initial.candidates.every((candidate) => candidate.lineage.status === "synthetic_7_of_7"), true);
+  assert.equal(initial.mode, "installer_data_only");
+  assert.equal(initial.candidates.length, 0);
   assert.equal(initial.automaticStateChanges, false);
   assert.equal("reportSubmission" in initial, false);
   await assert.rejects(
-    workbench.confirmConflict({ candidateId: "synthetic-candidate-06", eventType: "决策变化", businessStatement: "中性业务事实", occurredAt: "" }),
-    /发生时间/,
+    workbench.confirmConflict({}),
+    /不内置人物、项目或群聊示例/u,
   );
-  const conflict = await workbench.confirmConflict({
-    candidateId: "synthetic-candidate-06",
-    eventType: "决策变化",
-    businessStatement: "中性业务事实",
-    occurredAt: "2026-01-01T09:00:00.000Z",
-  });
-  assert.equal(conflict.confirmed, true);
-  assert.equal(conflict.semantics, "candidate_only");
-  assert.deepEqual(conflict.conflict, {
-    candidateId: "synthetic-candidate-06",
-    eventType: "决策变化",
-    businessStatement: "中性业务事实",
-    occurredAt: "2026-01-01T09:00:00.000Z",
-    confirmedAt: "2026-08-24T00:00:00.000Z",
-  });
 });
 
 test("发布检查拒绝凭证、私人绝对路径、私有云文档链接和数据文件", async () => {
@@ -593,7 +514,7 @@ test("Token、消息与分析结果只以加密形式写入安装者本地目录
   assert.equal((await stat(path.join(root, "workspace.enc.json"))).mode & 0o777, 0o600);
 });
 
-test("本地试用链路由用户选择群聊后拉取，再由用户显式触发模型分析", async () => {
+test("本地试用链路由用户选择私聊或群聊后拉取，再由用户显式触发 B/C 分析", async () => {
   const writes = new Map();
   const store = {
     async read(key) { return writes.get(key); },
@@ -617,8 +538,8 @@ test("本地试用链路由用户选择群聊后拉取，再由用户显式触�
           calls.push("list");
           return {
             chats: [
-              { id: "chat-1", name: "会话-1", type: "group", privateChat: false, groupChat: true },
-              { id: "chat-private", name: "私聊-1", type: "p2p", privateChat: true, groupChat: false },
+              { id: "source-a", name: "source-a", type: "group", privateChat: false, groupChat: true },
+              { id: "source-b", name: "source-b", type: "p2p", privateChat: true, groupChat: false },
             ],
             completeness: { complete: true, reason: "source_exhausted" },
           };
@@ -626,7 +547,7 @@ test("本地试用链路由用户选择群聊后拉取，再由用户显式触�
         async getMessages({ chatId }) {
           calls.push(`messages:${chatId}`);
           return {
-            messages: [{ id: "message-1", senderName: "成员-1", occurredAt: "2026-08-13T09:00:00.000Z", text: "动作-1" }],
+            messages: [{ id: `item-${chatId}`, senderName: "", occurredAt: "2026-08-13T09:00:00.000Z", text: "已确认在指定时间完成处理。" }],
             completeness: { complete: true, reason: "source_exhausted" },
           };
         },
@@ -634,8 +555,20 @@ test("本地试用链路由用户选择群聊后拉取，再由用户显式触�
     },
     inference: {
       async analyze(input) {
-        calls.push(`analyze:${input.messages.length}`);
-        return { summary: "候选摘要-1", candidates: [{ title: "候选-1", reason: "规则-1", evidenceIds: ["message-1"] }] };
+        calls.push(`analyze:${input.strategy}:${input.units.length}`);
+        return {
+          summary: "中性摘要",
+          candidates: [{
+            eventType: "时间点／截止期限变化",
+            title: "时间安排待复核",
+            latestChange: "出现明确时间安排。",
+            background: "上下文完整。",
+            uncertainty: "需要用户确认归属。",
+            userDecision: "是否纳入当前工作？",
+            semanticKey: "time-arrangement",
+            evidenceIds: input.units.flatMap((unit) => unit.evidenceIds),
+          }],
+        };
       },
     },
     now: () => new Date("2026-08-13T12:00:00.000Z"),
@@ -644,26 +577,33 @@ test("本地试用链路由用户选择群聊后拉取，再由用户显式触�
   const auth = runtime.beginAuthorization();
   await runtime.finishAuthorization({ code: "code", state: auth.state });
   const chatResult = await runtime.listChats();
-  assert.deepEqual(chatResult.chats, [{ id: "chat-1", name: "会话-1", type: "group", privateChat: false, groupChat: true }]);
-  assert.equal(chatResult.hiddenPrivateChats, 1);
-  await assert.rejects(runtime.importMessages({ chatIds: ["chat-private"], days: 7 }), /私聊默认不进入/);
-  const imported = await runtime.importMessages({ chatIds: ["chat-1"], days: 7 });
-  assert.equal(imported.messageCount, 1);
-  assert.equal(calls.includes("analyze:1"), false);
+  assert.deepEqual(chatResult.chats.map((item) => item.conversationKind), ["group", "direct"]);
+  assert.equal(chatResult.unsupportedChats, 0);
+  const imported = await runtime.importMessages({ chatIds: ["source-a", "source-b"], days: 7 });
+  assert.equal(imported.messageCount, 2);
+  assert.equal(calls.some((item) => item.startsWith("analyze:")), false);
   const analysis = await runtime.analyzeImportedMessages();
-  assert.equal(analysis.summary, "候选摘要-1");
-  assert.deepEqual(analysis.candidates[0].evidence, [{
-    messageId: "message-1",
-    chatName: "会话-1",
-    occurredAt: "2026-08-13T09:00:00.000Z",
-    excerpt: "动作-1",
-  }]);
-  assert.deepEqual(await runtime.saveJudgment({ candidateIndex: 0, decision: "important" }), {
-    saved: true,
-    candidateIndex: 0,
-    decision: "important",
+  assert.equal(analysis.summary, "中性摘要");
+  assert.equal(analysis.candidates.length, 1);
+  assert.deepEqual(analysis.candidates[0].strategies, ["B", "C"]);
+  assert.equal(analysis.candidates[0].evidence.length, 2);
+  await runtime.saveOwnership({
+    candidateId: analysis.candidates[0].candidateId,
+    kind: "new_work_thread",
+    threadTitle: "待复核事项",
   });
-  assert.deepEqual(calls, ["list", "messages:chat-1", "analyze:1"]);
+  const decision = await runtime.saveImportance({
+    candidateId: analysis.candidates[0].candidateId,
+    importance: "current_important",
+  });
+  assert.equal(decision.ripple.currentStateChanged, true);
+  assert.deepEqual(calls, [
+    "list",
+    "messages:source-a",
+    "messages:source-b",
+    "analyze:B:2",
+    "analyze:C:2",
+  ]);
 });
 
 test("本地写操作拒绝跨站或非 JSON 请求，不能被网页静默触发模型分析", async () => {
@@ -718,64 +658,79 @@ test("本地写操作拒绝跨站或非 JSON 请求，不能被网页静默触�
   }
 });
 
-test("公开 Alpha 将所有 Report HTTP 路由收口为 feature_not_available，且不调用运行时", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-report-disabled-"));
+test("本地工作台 favicon 请求返回空成功响应，不产生浏览器 404", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-favicon-"));
   const indexFile = path.join(root, "index.html");
   await writeFile(indexFile, "<!doctype html><title>local</title>", "utf8");
-  let reportCalls = 0;
   const server = createLocalHttpServer({
     indexFile,
     runtime: {
       async status() { return {}; },
       async readWorkspace() { return {}; },
-      async draftPublicIssue() { reportCalls += 1; },
-      async confirmPublicIssue() { reportCalls += 1; },
-      async readPublicIssue() { reportCalls += 1; },
-      async readLatestPublicIssue() { reportCalls += 1; },
-      async correctPublicIssue() { reportCalls += 1; },
-      async revokePublicIssueConfirmation() { reportCalls += 1; },
-      async readPublicIssueHistory() { reportCalls += 1; },
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get("cache-control"), "public, max-age=86400");
+    assert.equal(await response.text(), "");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("Report HTTP 只暴露本地草稿、回读和确认 seam，不包含 GitHub 提交路由", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "third-brain-local-report-disabled-"));
+  const indexFile = path.join(root, "index.html");
+  await writeFile(indexFile, "<!doctype html><title>local</title>", "utf8");
+  const reportCalls = [];
+  const server = createLocalHttpServer({
+    indexFile,
+    runtime: {
+      async status() { return {}; },
+      async readWorkspace() { return {}; },
+      async createReportDraft() { reportCalls.push("draft"); return { status: "preview_only" }; },
+      async confirmReportDraft() { reportCalls.push("confirm"); return { status: "confirmed_local_only" }; },
+      async readReportDraft() { reportCalls.push("read"); return { status: "preview_only" }; },
     },
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const origin = `http://127.0.0.1:${port}`;
   try {
-    for (const [method, pathname] of [
-      ["POST", "/api/public-workbench/reports"],
-      ["POST", "/api/public-workbench/reports/confirm"],
-      ["GET", "/api/public-workbench/reports/latest?candidateId=synthetic-candidate-01"],
-      ["GET", "/api/public-workbench/reports/draft-1"],
-      ["GET", "/api/public-workbench/report-history?draftId=draft-1"],
-      ["POST", "/api/public-workbench/reports/correct"],
-      ["POST", "/api/public-workbench/reports/revoke"],
+    for (const [method, pathname, expectedStatus] of [
+      ["POST", "/api/reports", 200],
+      ["POST", "/api/reports/confirm", 200],
+      ["GET", "/api/reports/draft_12345678", 200],
+      ["POST", "/api/reports/submit", 404],
     ]) {
       const response = await fetch(origin + pathname, {
         method,
         headers: method === "POST" ? { origin, "content-type": "application/json" } : undefined,
         body: method === "POST" ? "{}" : undefined,
       });
-      assert.equal(response.status, 404, `${method} ${pathname}`);
-      assert.deepEqual(await response.json(), { error: "feature_not_available", feature: "report_to_issue" });
+      assert.equal(response.status, expectedStatus, `${method} ${pathname}`);
+      await response.json();
     }
-    assert.equal(reportCalls, 0);
+    assert.deepEqual(reportCalls, ["draft", "confirm", "read"]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("公开工作台页面不保留 Report UI、说明或路由调用", async () => {
+test("公开工作台保留本地 Report 草稿与预览入口，但不包含 GitHub 自动提交调用", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const [page, script] = await Promise.all([
     readFile(path.join(root, "public", "index.html"), "utf8"),
     readFile(path.join(root, "public", "workbench-ui.js"), "utf8"),
   ]);
   const publicSurface = page + script;
-  for (const pattern of [/Report to Issue/u, /本地草稿/u, /report-history/u, /\/reports/u]) {
-    assert.doesNotMatch(publicSurface, pattern);
-  }
-  assert.match(publicSurface, /确认三字段裁决/u);
-  assert.match(script, /\/api\/public-workbench\/conflicts/u);
+  assert.match(publicSurface, /报告问题/u);
+  assert.match(publicSurface, /本地草稿/u);
+  assert.match(script, /\/api\/reports/u);
+  assert.doesNotMatch(script, /\/api\/reports\/submit/u);
 });
 
 test("WPS 会话自动翻页，消息达到安全上限时必须显式报告截断", async () => {
@@ -826,6 +781,7 @@ test("导入存在截断时禁止模型分析，避免把不完整样本当作�
       if (name !== "workspace") return undefined;
       return {
         messages: [{ id: "message-1", text: "动作" }],
+        evidence: [{}],
         sources: [{ completeness: { complete: false, reason: "message_limit_2000" } }],
       };
     },
@@ -863,6 +819,14 @@ test("公开 Git 历史使用同一私人 denylist 检出已删除内容", async
   await unlink(path.join(root, ".env.local"));
   assert.equal(runGit(["add", "-u"]).status, 0);
   assert.equal(runGit(["commit", "-m", "remove environment"]).status, 0);
+  await writeFile(path.join(root, "removed.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]));
+  await writeFile(path.join(root, "removed-large.txt"), "x".repeat(1_000_001), "utf8");
+  assert.equal(runGit(["add", "removed.png", "removed-large.txt"]).status, 0);
+  assert.equal(runGit(["commit", "-m", "temporary binary and oversized blob"]).status, 0);
+  await unlink(path.join(root, "removed.png"));
+  await unlink(path.join(root, "removed-large.txt"));
+  assert.equal(runGit(["add", "-u"]).status, 0);
+  assert.equal(runGit(["commit", "-m", "remove binary and oversized blob"]).status, 0);
   await writeFile(denylist, `${privateLiteral}\n`, { encoding: "utf8", mode: 0o600 });
 
   const result = spawnSync(process.execPath, [
@@ -873,6 +837,8 @@ test("公开 Git 历史使用同一私人 denylist 检出已删除内容", async
   assert.equal(result.status, 1);
   assert.match(result.stderr, /private_denylist_match/);
   assert.match(result.stderr, /private_environment_file/);
+  assert.match(result.stderr, /history_unsupported_binary_or_file_type/);
+  assert.match(result.stderr, /history_file_too_large/);
 });
 
 test("发布总门强制要求私人 denylist", async () => {

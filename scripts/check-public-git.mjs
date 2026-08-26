@@ -6,6 +6,11 @@ import process from "node:process";
 
 import { scanReleaseText } from "./release-check.mjs";
 
+const MAX_HISTORY_FILE_BYTES = 1_000_000;
+const HISTORY_TEXT_EXTENSIONS = new Set([
+  ".md", ".html", ".css", ".js", ".mjs", ".json", ".example", ".gitignore", ".txt",
+]);
+
 function git(args) {
   const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
   if (result.status !== 0) throw new Error("Git 历史检查无法完成");
@@ -22,6 +27,12 @@ function inspectHistoryPath(relative) {
     return "forbidden_data_file";
   }
   return null;
+}
+
+function isHistoryTextPath(relative) {
+  const basename = path.basename(relative);
+  if (basename === "LICENSE" || basename === ".gitignore") return true;
+  return HISTORY_TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase());
 }
 
 function scanBlobObjects(blobOids, pathsByOid, denylist) {
@@ -47,12 +58,23 @@ function scanBlobObjects(blobOids, pathsByOid, denylist) {
           current = { oid, size: Number(sizeText) };
         }
         if (buffer.length < current.size + 1) return;
-        const content = buffer.subarray(0, current.size).toString("utf8");
-        const relative = pathsByOid.get(current.oid)?.[0] ?? `git-object:${current.oid.slice(0, 12)}`;
-        findings.push(...scanReleaseText(`git-history:${relative}`, content));
-        for (const literal of denylist) {
-          if (literal.length >= 2 && content.includes(literal)) {
-            findings.push({ code: "private_denylist_match", file: `git-history:${relative}` });
+        const payload = buffer.subarray(0, current.size);
+        const paths = pathsByOid.get(current.oid) ?? [`git-object:${current.oid.slice(0, 12)}`];
+        const labels = paths.map((relative) => `git-history:${relative}`);
+        if (current.size > MAX_HISTORY_FILE_BYTES) {
+          for (const file of labels) findings.push({ code: "history_file_too_large", file });
+        } else {
+          const binary = payload.includes(0) || paths.some((relative) => !isHistoryTextPath(relative));
+          if (binary) {
+            for (const file of labels) findings.push({ code: "history_unsupported_binary_or_file_type", file });
+          } else {
+            const content = payload.toString("utf8");
+            for (const file of labels) findings.push(...scanReleaseText(file, content));
+            for (const literal of denylist) {
+              if (literal.length >= 2 && content.includes(literal)) {
+                for (const file of labels) findings.push({ code: "private_denylist_match", file });
+              }
+            }
           }
         }
         buffer = buffer.subarray(current.size + 1);
