@@ -64,6 +64,7 @@ test("B 单条与 C 连续上下文并行抽取后按 Evidence 血缘去重", as
       return {
         summary: "中性摘要",
         candidates: [{
+          eventType: "时间点／截止期限变化",
           title: "时间安排待复核",
           latestChange: "出现明确时间安排。",
           background: "连续上下文补足对象。",
@@ -115,6 +116,7 @@ test("B/C 并行执行且单路失败时保留另一策略结果和已知缺口"
       return {
         summary: "连续上下文显示需要复核。",
         candidates: [{
+          eventType: "时间点／截止期限变化",
           title: "上线安排待复核",
           semanticKey: "release-arrangement",
           evidenceIds: units.flatMap((unit) => unit.evidenceIds),
@@ -162,6 +164,7 @@ test("共享 Evidence 但 semanticKey 不同的候选保持分开", async () => 
       return {
         summary: `${strategy} 摘要`,
         candidates: [{
+          eventType: strategy === "B" ? "时间点／截止期限变化" : "阻塞／风险变化",
           title: strategy === "B" ? "时间安排待复核" : "风险待复核",
           semanticKey: strategy === "B" ? "time-arrangement" : "delivery-risk",
           evidenceIds: [evidence[0].evidenceId],
@@ -176,6 +179,93 @@ test("共享 Evidence 但 semanticKey 不同的候选保持分开", async () => 
     "time-arrangement",
   ]);
   assert.equal(result.candidates.every((item) => item.strategies.length === 1), true);
+});
+
+test("缺失或未知 eventType 的模型候选被拒绝", async () => {
+  const evidence = [buildSourceEvidence({
+    installationId: "installation_test",
+    conversation: { id: "source-type", name: "", conversationKind: "direct" },
+    message: { id: "item-type", occurredAt: iso(0), senderName: "", text: "需要复核。" },
+  })];
+  const pipeline = createBcCandidatePipeline({
+    async analyze({ strategy }) {
+      return {
+        summary: strategy,
+        candidates: [{
+          ...(strategy === "B" ? {} : { eventType: "未冻结的新类型" }),
+          title: "未绑定类型的候选",
+          semanticKey: "unbound-type",
+          evidenceIds: [evidence[0].evidenceId],
+        }],
+      };
+    },
+  });
+  const result = await pipeline.run(evidence);
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.counts.rawCandidates, 0);
+});
+
+test("相同 semanticKey 但 eventType 不同的候选保持分开", async () => {
+  const evidence = [buildSourceEvidence({
+    installationId: "installation_test",
+    conversation: { id: "source-event-type", name: "", conversationKind: "group" },
+    message: { id: "item-event-type", occurredAt: iso(0), senderName: "", text: "存在进展和风险。" },
+  })];
+  const pipeline = createBcCandidatePipeline({
+    async analyze({ strategy }) {
+      return {
+        summary: strategy,
+        candidates: [{
+          eventType: strategy === "B" ? "进展／完成变化" : "阻塞／风险变化",
+          title: strategy === "B" ? "进展待复核" : "风险待复核",
+          semanticKey: "same-business-subject",
+          evidenceIds: [evidence[0].evidenceId],
+        }],
+      };
+    },
+  });
+  const result = await pipeline.run(evidence);
+  assert.equal(result.candidates.length, 2);
+  assert.deepEqual(result.candidates.map((item) => item.eventType).toSorted(), [
+    "进展／完成变化",
+    "阻塞／风险变化",
+  ].toSorted());
+});
+
+test("B/C 只接收唯一且最高 revision 的 Evidence，冲突 revision 拒绝分析", async () => {
+  const first = buildSourceEvidence({
+    installationId: "installation_test",
+    conversation: { id: "source-revision", name: "", conversationKind: "group" },
+    message: { id: "item-revision", occurredAt: iso(0), senderName: "", text: "第一版。" },
+  });
+  const secondBuilt = buildSourceEvidence({
+    installationId: "installation_test",
+    conversation: { id: "source-revision", name: "", conversationKind: "group" },
+    message: { id: "item-revision", occurredAt: iso(0), senderName: "", text: "第二版。" },
+  });
+  const second = { ...secondBuilt, revision: 2 };
+  const calls = [];
+  const pipeline = createBcCandidatePipeline({
+    async analyze({ strategy, units }) {
+      calls.push({ strategy, units });
+      return { summary: strategy, candidates: [] };
+    },
+  });
+
+  const result = await pipeline.run([first, first, second, second]);
+  assert.equal(result.counts.evidence, 1);
+  assert.equal(result.counts.bUnits, 1);
+  assert.equal(result.counts.cUnits, 1);
+  assert.equal(calls[0].units.length, 1);
+  assert.equal(calls[0].units[0].items[0].revision, 2);
+  assert.equal(calls[1].units.length, 1);
+  assert.equal(calls[1].units[0].items[0].revision, 2);
+
+  await assert.rejects(
+    pipeline.run([first, { ...secondBuilt, revision: 1 }]),
+    /同一 Evidence revision 出现冲突内容/u,
+  );
+  assert.equal(calls.length, 2, "冲突 Evidence 不能进入任一模型策略");
 });
 
 test("真实导入候选必须先确认工作归属，再确认重要性并产生可回读涟漪", async () => {
@@ -215,6 +305,7 @@ test("真实导入候选必须先确认工作归属，再确认重要性并产�
         return {
           summary: "中性摘要",
           candidates: [{
+            eventType: "时间点／截止期限变化",
             title: "时间安排待复核",
             latestChange: "出现明确时间安排。",
             background: "上下文完整。",
@@ -280,6 +371,7 @@ test("再次导入和重新分析不会清空已经确认的业务状态", async
         return {
           summary: "中性摘要",
           candidates: [{
+            eventType: "时间点／截止期限变化",
             title: "时间安排待复核",
             latestChange: "出现明确时间安排。",
             semanticKey: "time-arrangement",

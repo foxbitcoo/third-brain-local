@@ -4,6 +4,14 @@ import { createHash } from "node:crypto";
 const WINDOW_MS = 90 * 60 * 1000;
 const MAX_CONTEXT_ITEMS = 5;
 const CONVERSATION_KINDS = new Set(["direct", "group"]);
+const EVENT_TYPES = new Set([
+  "决策变化",
+  "责任归属变化",
+  "下一步变化",
+  "进展／完成变化",
+  "阻塞／风险变化",
+  "时间点／截止期限变化",
+]);
 
 function digest(domain, value) {
   return createHash("sha256").update(`${domain}\0${value}`).digest("hex");
@@ -129,6 +137,26 @@ function cUnits(evidence) {
   }));
 }
 
+function uniqueCurrentEvidence(evidence) {
+  const byId = new Map();
+  for (const item of evidence) {
+    if (typeof item?.evidenceId !== "string"
+      || !Number.isSafeInteger(item?.revision) || item.revision < 1
+      || typeof item?.fingerprint !== "string" || !item.fingerprint) {
+      throw new TypeError("Evidence identity is invalid");
+    }
+    const current = byId.get(item.evidenceId);
+    if (!current || item.revision > current.revision) {
+      byId.set(item.evidenceId, item);
+      continue;
+    }
+    if (item.revision === current.revision && item.fingerprint !== current.fingerprint) {
+      throw new Error("同一 Evidence revision 出现冲突内容；未进入模型分析");
+    }
+  }
+  return [...byId.values()];
+}
+
 function normalizedCandidate(candidate, strategy, evidenceById) {
   const evidenceIds = [...new Set(
     (Array.isArray(candidate?.evidenceIds) ? candidate.evidenceIds : [])
@@ -137,8 +165,10 @@ function normalizedCandidate(candidate, strategy, evidenceById) {
   if (evidenceIds.length === 0) return null;
   const title = cleanText(candidate.title || "待判断事项", 120);
   const semanticKey = cleanText(candidate.semanticKey || title.toLowerCase(), 160);
-  if (!semanticKey) return null;
+  const eventType = cleanText(candidate.eventType, 40);
+  if (!semanticKey || !EVENT_TYPES.has(eventType)) return null;
   return {
+    eventType,
     title,
     latestChange: cleanText(candidate.latestChange || candidate.reason, 500),
     background: cleanText(candidate.background, 1_000),
@@ -160,6 +190,7 @@ function fuseCandidates(candidates, evidenceById) {
   for (const candidate of candidates) {
     const existing = fused.find((item) => (
       intersects(item.evidenceIds, candidate.evidenceIds)
+      && item.eventType === candidate.eventType
       && item.semanticKey === candidate.semanticKey
     ));
     if (existing) {
@@ -188,9 +219,10 @@ function fuseCandidates(candidates, evidenceById) {
     return Object.freeze({
       candidateId: `candidate_${digest(
         "third-brain/public-candidate/v1",
-        `${candidate.semanticKey}\0${candidate.evidenceIds.toSorted().join("\0")}`,
+        `${candidate.eventType}\0${candidate.semanticKey}\0${candidate.evidenceIds.toSorted().join("\0")}`,
       ).slice(0, 24)}`,
       revision: 1,
+      eventType: candidate.eventType,
       title: candidate.title,
       latestChange: candidate.latestChange || "检测到需要用户复核的变化。",
       background: candidate.background || "当前只保留最少必要上下文。",
@@ -213,12 +245,13 @@ export function createBcCandidatePipeline({ analyze }) {
   return Object.freeze({
     async run(evidence) {
       if (!Array.isArray(evidence)) throw new TypeError("Evidence array is required");
-      const evidenceById = new Map(evidence.map((item) => [item.evidenceId, item]));
+      const currentEvidence = uniqueCurrentEvidence(evidence);
+      const evidenceById = new Map(currentEvidence.map((item) => [item.evidenceId, item]));
       const outputs = [];
       const summaries = [];
       const runs = [
-        { strategy: "B", units: bUnits(evidence) },
-        { strategy: "C", units: cUnits(evidence) },
+        { strategy: "B", units: bUnits(currentEvidence) },
+        { strategy: "C", units: cUnits(currentEvidence) },
       ];
       const settled = await Promise.allSettled(runs.map(({ strategy, units }) => (
         analyze({ strategy, units })
@@ -270,7 +303,7 @@ export function createBcCandidatePipeline({ analyze }) {
         knownGaps: Object.freeze(knownGaps),
         provenance: Object.freeze({ strategies: Object.freeze(strategyProvenance) }),
         counts: Object.freeze({
-          evidence: evidence.length,
+          evidence: currentEvidence.length,
           bUnits: runs[0].units.length,
           cUnits: runs[1].units.length,
           rawCandidates: outputs.length,

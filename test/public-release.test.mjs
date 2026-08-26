@@ -559,6 +559,7 @@ test("本地试用链路由用户选择私聊或群聊后拉取，再由用户�
         return {
           summary: "中性摘要",
           candidates: [{
+            eventType: "时间点／截止期限变化",
             title: "时间安排待复核",
             latestChange: "出现明确时间安排。",
             background: "上下文完整。",

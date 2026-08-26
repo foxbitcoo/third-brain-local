@@ -45,7 +45,7 @@ export function createOpenAiCompatibleAnalyzer({
           messages: [
             {
               role: "system",
-              content: `你是办公信号分析助手。${strategyInstruction}只根据输入 Evidence 输出 JSON：summary 字符串；candidates 数组，每项必须含 title、latestChange、background、uncertainty、userDecision、semanticKey、evidenceIds。evidenceIds 只能引用输入中真实存在的编号。标题只做简短业务总结；背景、最新变化、AI 不确定点和需要用户判断的事项必须分开。不要把普通聊天包装成工作，不确定就不生成候选。只输出 JSON。`,
+              content: `你是办公信号分析助手。${strategyInstruction}只根据输入 Evidence 输出 JSON：summary 字符串；candidates 数组，每项必须含 eventType、title、latestChange、background、uncertainty、userDecision、semanticKey、evidenceIds。eventType 只能是“决策变化、责任归属变化、下一步变化、进展／完成变化、阻塞／风险变化、时间点／截止期限变化”之一；evidenceIds 只能引用输入中真实存在的编号。标题只做简短业务总结；背景、最新变化、AI 不确定点和需要用户判断的事项必须分开。不要把普通聊天包装成工作，不确定就不生成候选。只输出 JSON。`,
             },
             { role: "user", content: JSON.stringify(compact) },
           ],
