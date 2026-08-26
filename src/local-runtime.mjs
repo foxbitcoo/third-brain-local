@@ -16,6 +16,7 @@ export function createLocalTrialRuntime({
 }) {
   let authorizationState;
   let selectableChats = new Map();
+  let mutationTail = Promise.resolve();
   const oauthPort = oauth || {
     buildAuthorization: () => buildWpsAuthorizationUrl({
       appId: config.wps.appId,
@@ -61,6 +62,62 @@ export function createLocalTrialRuntime({
     const candidate = workspace?.analysis?.candidates?.find((item) => item.candidateId === candidateId);
     if (!candidate) throw new Error("候选不存在");
     return candidate;
+  }
+
+  function serializeMutation(operation) {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function formalDecisions(workspace) {
+    return workspace?.decisions || workspace?.analysis?.decisions || [];
+  }
+
+  function sameOwnership(left, right) {
+    const comparable = (value) => value === null || value === undefined ? null : {
+      candidateId: value.candidateId,
+      kind: value.kind,
+      threadId: value.threadId ?? null,
+      threadTitle: value.threadTitle ?? null,
+    };
+    return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
+  }
+
+  function mergeBy(items, additions, keyFor) {
+    const merged = new Map(items.map((item) => [keyFor(item), item]));
+    for (const item of additions) merged.set(keyFor(item), item);
+    return [...merged.values()];
+  }
+
+  function reconcileEvidence(previous, observed) {
+    const byItem = new Map(previous.map((item) => [item.source.itemId, item]));
+    const currentBatch = new Map(observed.map((item) => [item.source.itemId, item]));
+    for (const [itemId, item] of currentBatch) {
+      const prior = byItem.get(itemId);
+      if (!prior) {
+        byItem.set(itemId, item);
+      } else if (prior.fingerprint !== item.fingerprint) {
+        byItem.set(itemId, Object.freeze({
+          ...item,
+          revision: prior.revision + 1,
+        }));
+      }
+    }
+    return [...byItem.values()];
+  }
+
+  function decisionReceipt(workspace, decision) {
+    const persisted = (workspace.decisionReceipts || []).find((item) => (
+      item.decision?.decisionId === decision.decisionId
+    ));
+    return persisted || Object.freeze({
+      schemaVersion: "public-decision-receipt/v1",
+      receiptId: `receipt_${decision.decisionId}`,
+      saved: true,
+      decision,
+      ripple: decision.ripple,
+    });
   }
 
   return Object.freeze({
@@ -110,179 +167,222 @@ export function createLocalTrialRuntime({
         unsupportedChats: normalizedChats.length - supportedChats.length,
       };
     },
-    async importMessages({ chatIds, days }) {
-      if (!Array.isArray(chatIds) || chatIds.length < 1 || chatIds.length > 10) throw new Error("请选择 1 至 10 个私聊或群聊来源");
-      if (!Number.isInteger(days) || days < 1 || days > 30) throw new Error("首轮只支持最近 1 至 30 天");
-      for (const chatId of chatIds) {
-        if (!selectableChats.has(chatId)) throw new Error("只能导入刚刚读取并显示的私聊或群聊");
-      }
-      const credential = await credentials();
-      const client = wpsClientFactory({ accessToken: credential.accessToken });
-      const endAt = now();
-      const startAt = new Date(endAt.getTime() - days * 24 * 60 * 60 * 1000);
-      const messages = [];
-      const evidence = [];
-      const sources = [];
-      const ownerInstallationId = await installationId();
-      for (const chatId of [...new Set(chatIds)]) {
-        const result = await client.getMessages({ chatId, startAt: startAt.toISOString(), endAt: endAt.toISOString() });
-        const chat = selectableChats.get(chatId);
-        messages.push(...result.messages.map((item) => ({ ...item, chatId, chatName: chat.name })));
-        evidence.push(...result.messages.map((item) => buildSourceEvidence({
-          installationId: ownerInstallationId,
-          conversation: chat,
-          message: item,
-        })));
-        sources.push({
-          chatId,
-          chatName: chat.name,
-          conversationKind: chat.conversationKind,
-          messageCount: result.messages.length,
-          completeness: result.completeness,
+    async importMessages(input) {
+      return serializeMutation(async () => {
+        const { chatIds, days } = input;
+        if (!Array.isArray(chatIds) || chatIds.length < 1 || chatIds.length > 10) throw new Error("请选择 1 至 10 个私聊或群聊来源");
+        if (!Number.isInteger(days) || days < 1 || days > 30) throw new Error("首轮只支持最近 1 至 30 天");
+        for (const chatId of chatIds) {
+          if (!selectableChats.has(chatId)) throw new Error("只能导入刚刚读取并显示的私聊或群聊");
+        }
+        const credential = await credentials();
+        const client = wpsClientFactory({ accessToken: credential.accessToken });
+        const endAt = now();
+        const startAt = new Date(endAt.getTime() - days * 24 * 60 * 60 * 1000);
+        const messages = [];
+        const evidence = [];
+        const sources = [];
+        const ownerInstallationId = await installationId();
+        for (const chatId of [...new Set(chatIds)]) {
+          const result = await client.getMessages({ chatId, startAt: startAt.toISOString(), endAt: endAt.toISOString() });
+          const chat = selectableChats.get(chatId);
+          messages.push(...result.messages.map((item) => ({ ...item, chatId, chatName: chat.name })));
+          evidence.push(...result.messages.map((item) => buildSourceEvidence({
+            installationId: ownerInstallationId,
+            conversation: chat,
+            message: item,
+          })));
+          sources.push({
+            chatId,
+            chatName: chat.name,
+            conversationKind: chat.conversationKind,
+            messageCount: result.messages.length,
+            completeness: result.completeness,
+          });
+        }
+        const previous = await store.read("workspace") || {};
+        const decisions = formalDecisions(previous);
+        const nextSources = mergeBy(previous.sources || [], sources, (item) => item.chatId);
+        const nextMessages = mergeBy(
+          previous.messages || [],
+          messages,
+          (item) => `${item.chatId}\0${item.id}`,
+        );
+        const nextEvidence = reconcileEvidence(previous.evidence || [], evidence);
+        await store.write("workspace", {
+          ...previous,
+          importedAt: endAt.toISOString(),
+          range: { startAt: startAt.toISOString(), endAt: endAt.toISOString() },
+          chatIds: [...new Set([...(previous.chatIds || []), ...chatIds])],
+          sources: nextSources,
+          messages: nextMessages,
+          evidence: nextEvidence,
+          decisions,
+          workThreads: previous.workThreads || [],
+          workEvents: previous.workEvents || [],
+          currentStates: previous.currentStates || [],
+          analysis: previous.analysis ? { ...previous.analysis, decisions } : null,
         });
-      }
-      await store.write("workspace", {
-        importedAt: endAt.toISOString(),
-        range: { startAt: startAt.toISOString(), endAt: endAt.toISOString() },
-        chatIds: [...new Set(chatIds)],
-        sources,
-        messages,
-        evidence,
-        workThreads: [],
-        workEvents: [],
-        currentStates: [],
+        return {
+          messageCount: messages.length,
+          complete: sources.every((source) => source.completeness.complete),
+          sources,
+          range: { startAt: startAt.toISOString(), endAt: endAt.toISOString() },
+        };
       });
-      return {
-        messageCount: messages.length,
-        complete: sources.every((source) => source.completeness.complete),
-        sources,
-        range: { startAt: startAt.toISOString(), endAt: endAt.toISOString() },
-      };
     },
     async analyzeImportedMessages() {
-      const workspace = await store.read("workspace");
-      if (!workspace?.evidence?.length) throw new Error("请先导入消息");
-      if (!workspace.sources?.every((source) => source.completeness?.complete)) {
-        throw new Error("当前导入存在截断；请缩短时间范围或减少群聊后重新导入，再进行分析");
-      }
-      const pipeline = createBcCandidatePipeline({
-        analyze: ({ strategy, units }) => inference.analyze({ strategy, units }),
-      });
-      const result = await pipeline.run(workspace.evidence);
-      const previous = workspace.analysis || {};
-      const candidateIds = new Set(result.candidates.map((candidate) => candidate.candidateId));
-      const analysis = {
-        schemaVersion: result.schemaVersion,
-        extractorVersion: result.extractorVersion,
-        summary: result.summary,
-        counts: result.counts,
-        candidates: result.candidates,
-        generatedAt: now().toISOString(),
-        ownershipDrafts: (previous.ownershipDrafts || []).filter((item) => candidateIds.has(item.candidateId)),
-        decisions: (previous.decisions || []).filter((item) => candidateIds.has(item.candidateId)),
-      };
-      await store.write("workspace", { ...workspace, analysis });
-      return analysis;
-    },
-    async saveOwnership({ candidateId, kind, threadId = null, threadTitle = null }) {
-      if (!["existing_work_thread", "new_work_thread", "not_current_work"].includes(kind)) {
-        throw new Error("工作归属参数无效");
-      }
-      const workspace = await store.read("workspace");
-      analysisCandidate(workspace, candidateId);
-      if (kind === "existing_work_thread" && !(workspace.workThreads || []).some((item) => item.threadId === threadId)) {
-        throw new Error("现有工作主线不存在");
-      }
-      if (kind === "new_work_thread" && (typeof threadTitle !== "string" || !threadTitle.trim())) {
-        throw new Error("新工作主线标题不能为空");
-      }
-      const ownershipDraft = {
-        candidateId,
-        kind,
-        threadId: kind === "existing_work_thread" ? threadId : null,
-        threadTitle: kind === "new_work_thread" ? threadTitle.trim().slice(0, 120) : null,
-        recordedAt: now().toISOString(),
-      };
-      workspace.analysis.ownershipDrafts = [
-        ...(workspace.analysis.ownershipDrafts || []).filter((item) => item.candidateId !== candidateId),
-        ownershipDraft,
-      ];
-      await store.write("workspace", workspace);
-      return { saved: true, ownership: ownershipDraft };
-    },
-    async saveImportance({ candidateId, importance }) {
-      const allowed = new Set(["current_important", "related", "noise", "uncertain"]);
-      if (!allowed.has(importance)) throw new Error("重要性参数无效");
-      const workspace = await store.read("workspace");
-      const candidate = analysisCandidate(workspace, candidateId);
-      const ownership = (workspace.analysis.ownershipDrafts || []).find((item) => item.candidateId === candidateId);
-      if (importance === "current_important" && !["existing_work_thread", "new_work_thread"].includes(ownership?.kind)) {
-        throw new Error("请先确认工作归属，再判断为当前重要");
-      }
-      const existing = (workspace.analysis.decisions || []).find((item) => item.candidateId === candidateId);
-      if (existing?.importance === importance && JSON.stringify(existing.ownership) === JSON.stringify(ownership ?? null)) {
-        return { saved: true, replayed: true, decision: existing, ripple: existing.ripple };
-      }
-      const decidedAt = now().toISOString();
-      const decisionId = `decision_${randomUUID()}`;
-      const ripple = { workEventCreated: false, workThreadChanged: false, currentStateChanged: false };
-      if (importance === "current_important") {
-        let threadId = ownership.threadId;
-        if (ownership.kind === "new_work_thread") {
-          threadId = `workthread_${randomUUID()}`;
-          workspace.workThreads = [
-            ...(workspace.workThreads || []),
-            { threadId, title: ownership.threadTitle, revision: 1, createdAt: decidedAt },
-          ];
-          ripple.workThreadChanged = true;
+      return serializeMutation(async () => {
+        const workspace = await store.read("workspace");
+        if (!workspace?.evidence?.length) throw new Error("请先导入消息");
+        if (!workspace.sources?.every((source) => source.completeness?.complete)) {
+          throw new Error("当前导入存在截断；请缩短时间范围或减少群聊后重新导入，再进行分析");
         }
-        const workEvent = {
-          workEventId: `workevent_${randomUUID()}`,
-          candidateId,
-          threadId,
-          eventType: "user_confirmed_change",
-          businessStatement: candidate.latestChange,
-          occurredAt: candidate.latestOccurredAt,
-          evidenceSnapshot: candidate.evidence.map((item) => ({
-            evidenceId: item.evidenceId,
-            revision: item.revision,
-            fingerprint: item.fingerprint,
-          })),
-          createdByDecisionId: decisionId,
+        const pipeline = createBcCandidatePipeline({
+          analyze: ({ strategy, units }) => inference.analyze({ strategy, units }),
+        });
+        const result = await pipeline.run(workspace.evidence);
+        const previous = workspace.analysis || {};
+        const candidateIds = new Set(result.candidates.map((candidate) => candidate.candidateId));
+        const decisions = formalDecisions(workspace);
+        const analysis = {
+          schemaVersion: result.schemaVersion,
+          extractorVersion: result.extractorVersion,
+          summary: result.summary,
+          counts: result.counts,
+          candidates: result.candidates,
+          knownGaps: result.knownGaps,
+          provenance: result.provenance,
+          generatedAt: now().toISOString(),
+          ownershipDrafts: (previous.ownershipDrafts || []).filter((item) => candidateIds.has(item.candidateId)),
+          decisions,
         };
-        workspace.workEvents = [
-          ...(workspace.workEvents || []).filter((item) => item.candidateId !== candidateId),
-          workEvent,
+        await store.write("workspace", { ...workspace, analysis, decisions });
+        return analysis;
+      });
+    },
+    async saveOwnership(input) {
+      return serializeMutation(async () => {
+        const { candidateId, kind, threadId = null, threadTitle = null } = input;
+        if (!["existing_work_thread", "new_work_thread", "not_current_work"].includes(kind)) {
+          throw new Error("工作归属参数无效");
+        }
+        const workspace = await store.read("workspace");
+        analysisCandidate(workspace, candidateId);
+        const existingDecision = formalDecisions(workspace).find((item) => item.candidateId === candidateId);
+        if (kind === "existing_work_thread" && !(workspace.workThreads || []).some((item) => item.threadId === threadId)) {
+          throw new Error("现有工作主线不存在");
+        }
+        if (kind === "new_work_thread" && (typeof threadTitle !== "string" || !threadTitle.trim())) {
+          throw new Error("新工作主线标题不能为空");
+        }
+        const ownershipDraft = {
+          candidateId,
+          kind,
+          threadId: kind === "existing_work_thread" ? threadId : null,
+          threadTitle: kind === "new_work_thread" ? threadTitle.trim().slice(0, 120) : null,
+          recordedAt: now().toISOString(),
+        };
+        if (existingDecision) {
+          if (sameOwnership(existingDecision.ownership, ownershipDraft)) {
+            return { saved: true, ownership: existingDecision.ownership };
+          }
+          throw new Error("纠错、撤销或恢复尚未开放；已确认判断不能隐式重判");
+        }
+        const existingDraft = (workspace.analysis.ownershipDrafts || []).find((item) => (
+          item.candidateId === candidateId
+        ));
+        if (existingDraft && sameOwnership(existingDraft, ownershipDraft)) {
+          return { saved: true, ownership: existingDraft };
+        }
+        workspace.analysis.ownershipDrafts = [
+          ...(workspace.analysis.ownershipDrafts || []).filter((item) => item.candidateId !== candidateId),
+          ownershipDraft,
         ];
-        workspace.currentStates = [
-          ...(workspace.currentStates || []).filter((item) => item.threadId !== threadId),
-          {
+        await store.write("workspace", workspace);
+        return { saved: true, ownership: ownershipDraft };
+      });
+    },
+    async saveImportance(input) {
+      return serializeMutation(async () => {
+        const { candidateId, importance } = input;
+        const allowed = new Set(["current_important", "related", "noise", "uncertain"]);
+        if (!allowed.has(importance)) throw new Error("重要性参数无效");
+        const workspace = await store.read("workspace");
+        const candidate = analysisCandidate(workspace, candidateId);
+        const ownership = (workspace.analysis.ownershipDrafts || []).find((item) => item.candidateId === candidateId);
+        if (importance === "current_important" && !["existing_work_thread", "new_work_thread"].includes(ownership?.kind)) {
+          throw new Error("请先确认工作归属，再判断为当前重要");
+        }
+        const decisions = formalDecisions(workspace);
+        const existing = decisions.find((item) => item.candidateId === candidateId);
+        if (existing?.importance === importance && sameOwnership(existing.ownership, ownership)) {
+          return decisionReceipt(workspace, existing);
+        }
+        if (existing) {
+          throw new Error("纠错、撤销或恢复尚未开放；已确认判断不能隐式重判");
+        }
+        const decidedAt = now().toISOString();
+        const decisionId = `decision_${randomUUID()}`;
+        const ripple = { workEventCreated: false, workThreadChanged: false, currentStateChanged: false };
+        if (importance === "current_important") {
+          let threadId = ownership.threadId;
+          if (ownership.kind === "new_work_thread") {
+            threadId = `workthread_${randomUUID()}`;
+            workspace.workThreads = [
+              ...(workspace.workThreads || []),
+              { threadId, title: ownership.threadTitle, revision: 1, createdAt: decidedAt },
+            ];
+            ripple.workThreadChanged = true;
+          }
+          const workEvent = {
+            workEventId: `workevent_${randomUUID()}`,
+            candidateId,
             threadId,
-            revision: ((workspace.currentStates || []).find((item) => item.threadId === threadId)?.revision || 0) + 1,
-            latestChange: candidate.latestChange,
-            background: candidate.background,
-            nextAction: candidate.userDecision,
-            updatedAt: decidedAt,
-            sourceWorkEventId: workEvent.workEventId,
-          },
-        ];
-        ripple.workEventCreated = true;
-        ripple.currentStateChanged = true;
-      }
-      const decision = {
-        decisionId,
-        candidateId,
-        importance,
-        ownership: ownership ?? null,
-        decidedAt,
-        ripple,
-      };
-      workspace.analysis.decisions = [
-        ...(workspace.analysis.decisions || []).filter((item) => item.candidateId !== candidateId),
-        decision,
-      ];
-      await store.write("workspace", workspace);
-      return { saved: true, decision, ripple };
+            eventType: "user_confirmed_change",
+            businessStatement: candidate.latestChange,
+            occurredAt: candidate.latestOccurredAt,
+            evidenceSnapshot: candidate.evidence.map((item) => ({
+              evidenceId: item.evidenceId,
+              revision: item.revision,
+              fingerprint: item.fingerprint,
+            })),
+            createdByDecisionId: decisionId,
+          };
+          workspace.workEvents = [
+            ...(workspace.workEvents || []).filter((item) => item.candidateId !== candidateId),
+            workEvent,
+          ];
+          workspace.currentStates = [
+            ...(workspace.currentStates || []).filter((item) => item.threadId !== threadId),
+            {
+              threadId,
+              revision: ((workspace.currentStates || []).find((item) => item.threadId === threadId)?.revision || 0) + 1,
+              latestChange: candidate.latestChange,
+              background: candidate.background,
+              nextAction: candidate.userDecision,
+              updatedAt: decidedAt,
+              sourceWorkEventId: workEvent.workEventId,
+            },
+          ];
+          ripple.workEventCreated = true;
+          ripple.currentStateChanged = true;
+        }
+        const decision = {
+          decisionId,
+          candidateId,
+          importance,
+          ownership: ownership ?? null,
+          decidedAt,
+          ripple,
+        };
+        const receipt = decisionReceipt(workspace, decision);
+        workspace.decisions = [...decisions, decision];
+        workspace.analysis.decisions = workspace.decisions;
+        workspace.decisionReceipts = [...(workspace.decisionReceipts || []), receipt];
+        await store.write("workspace", workspace);
+        return receipt;
+      });
     },
     async readWorkspace() {
       const workspace = await store.read("workspace");
@@ -293,6 +393,7 @@ export function createLocalTrialRuntime({
         messageCount: workspace.messages?.length || 0,
         sources: workspace.sources || [],
         analysis: workspace.analysis || null,
+        decisions: formalDecisions(workspace),
         workThreads: workspace.workThreads || [],
         workEvents: workspace.workEvents || [],
         currentStates: workspace.currentStates || [],

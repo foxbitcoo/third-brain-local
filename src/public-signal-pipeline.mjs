@@ -160,10 +160,7 @@ function fuseCandidates(candidates, evidenceById) {
   for (const candidate of candidates) {
     const existing = fused.find((item) => (
       intersects(item.evidenceIds, candidate.evidenceIds)
-      && (
-        item.semanticKey === candidate.semanticKey
-        || item.strategies.some((strategy) => !candidate.strategies.includes(strategy))
-      )
+      && item.semanticKey === candidate.semanticKey
     ));
     if (existing) {
       const candidateAddsContext = candidate.evidenceIds.length > existing.evidenceIds.length;
@@ -219,23 +216,63 @@ export function createBcCandidatePipeline({ analyze }) {
       const evidenceById = new Map(evidence.map((item) => [item.evidenceId, item]));
       const outputs = [];
       const summaries = [];
-      for (const [strategy, units] of [["B", bUnits(evidence)], ["C", cUnits(evidence)]]) {
-        const result = await analyze({ strategy, units });
+      const runs = [
+        { strategy: "B", units: bUnits(evidence) },
+        { strategy: "C", units: cUnits(evidence) },
+      ];
+      const settled = await Promise.allSettled(runs.map(({ strategy, units }) => (
+        analyze({ strategy, units })
+      )));
+      if (settled.every((item) => item.status === "rejected")) {
+        throw new Error("B 与 C 策略均分析失败；未生成候选");
+      }
+      const knownGaps = [];
+      const strategyProvenance = [];
+      for (let index = 0; index < runs.length; index += 1) {
+        const { strategy, units } = runs[index];
+        const settledRun = settled[index];
+        if (settledRun.status === "rejected") {
+          knownGaps.push({
+            strategy,
+            code: "strategy_failed",
+            message: `${strategy} 策略分析失败；当前结果仅包含 ${strategy === "B" ? "C" : "B"} 策略。`,
+          });
+          strategyProvenance.push({
+            strategy,
+            status: "failed",
+            unitCount: units.length,
+            candidateCount: 0,
+          });
+          continue;
+        }
+        const result = settledRun.value;
         if (typeof result?.summary === "string" && result.summary.trim()) summaries.push(result.summary.trim());
+        let candidateCount = 0;
         for (const candidate of Array.isArray(result?.candidates) ? result.candidates : []) {
           const normalized = normalizedCandidate(candidate, strategy, evidenceById);
-          if (normalized) outputs.push(normalized);
+          if (normalized) {
+            outputs.push(normalized);
+            candidateCount += 1;
+          }
         }
+        strategyProvenance.push({
+          strategy,
+          status: "complete",
+          unitCount: units.length,
+          candidateCount,
+        });
       }
       return {
         schemaVersion: "public-bc-candidates/v1",
-        extractorVersion: "public-bc-dual/v1",
+        extractorVersion: "public-bc-dual/v2",
         summary: [...new Set(summaries)].join("\n") || "暂无可靠摘要",
         candidates: fuseCandidates(outputs, evidenceById),
+        knownGaps: Object.freeze(knownGaps),
+        provenance: Object.freeze({ strategies: Object.freeze(strategyProvenance) }),
         counts: Object.freeze({
           evidence: evidence.length,
-          bUnits: evidence.length,
-          cUnits: cUnits(evidence).length,
+          bUnits: runs[0].units.length,
+          cUnits: runs[1].units.length,
           rawCandidates: outputs.length,
         }),
       };
